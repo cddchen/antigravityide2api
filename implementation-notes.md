@@ -282,7 +282,7 @@ system 处理是**丢弃 + 抽 5 值重建**，不是「替换」。抽取表与
 ### 决策
 | 项 | 决定 | 原因 |
 |----|------|------|
-| OAuth client_secret | 常量 `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` | docs 只写了 ClientID；secret 取自 CLIProxy `internal/auth/antigravity/constants.go`（与 IDE 同源），活体 refresh 已 200 |
+| OAuth client_id/secret | **不入库**，`extractOAuthClient()` 从本机 IDE main.js 现取 | 原为硬编码常量，GitHub secret scanning GH013 直接 declined push。值本来就来自 IDE 安装，仓库存的只是副本；现取还能跟着 IDE 版本走 |
 | client_id/secret 覆盖 | `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET` | 规格要求 |
 | BFS 解码 | latin1 保留二进制 | protobuf 嵌套，utf8 会丢不可见字节里的 ASCII token 边界 |
 | writeTokenFile | `mode:0o600` + `chmodSync` | 已存在文件时 mode 不生效 |

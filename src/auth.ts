@@ -3,22 +3,19 @@ import config from './config';
 import type { TokenEntry, TokenFile } from './types';
 import { ensureConfigDir, getDefaultTokenPath } from './token-paths';
 import { postStream, decodeBody } from './antigravity-client';
+import { extractOAuthClient } from './extract-token';
 
 /**
- * IDE 同源 OAuth client（docs/Antigravity-IDE-API.md §4.1 ClientID；
- * secret 与 CLIProxy/IDE 同源，活体 refresh 已验证，见 implementation-notes）。
- * 可用 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 覆盖。
+ * IDE 同源 OAuth client。**不入库** —— 从本机 IDE 安装现取
+ * （见 extract-token.extractOAuthClient），env 可覆盖。
+ * 硬编码会被 GitHub secret scanning GH013 拦 push，且值随 IDE 版本可变。
  */
-const DEFAULT_CLIENT_ID =
-  '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
-const DEFAULT_CLIENT_SECRET = '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';
-
 function clientId(): string {
-  return process.env.ANTIGRAVITY_CLIENT_ID?.trim() || DEFAULT_CLIENT_ID;
+  return process.env.ANTIGRAVITY_CLIENT_ID?.trim() || extractOAuthClient().id;
 }
 
 function clientSecret(): string {
-  return process.env.ANTIGRAVITY_CLIENT_SECRET?.trim() || DEFAULT_CLIENT_SECRET;
+  return process.env.ANTIGRAVITY_CLIENT_SECRET?.trim() || extractOAuthClient().secret;
 }
 
 /** 读 token.json；无文件 / 非法结构抛错 */

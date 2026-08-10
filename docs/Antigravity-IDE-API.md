@@ -129,7 +129,10 @@ Accept-Encoding: gzip
 ### 4.1 OAuth（与 IDE 同源 client）
 
 ```
-ClientID:  1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com
+ClientID/Secret: 不入库（GitHub GH013），运行时从本机 IDE 主包现取：
+           /Applications/Antigravity IDE.app/Contents/Resources/app/out/main.js
+           /([0-9]{6,}-[a-z0-9]{16,}\.apps\.googleusercontent\.com)[\s\S]{0,64}?(GOCSPX-[A-Za-z0-9_-]{20,})/
+           实现见 src/extract-token.ts extractOAuthClient()
 Token:     https://oauth2.googleapis.com/token
 Scopes:    cloud-platform, userinfo.email, userinfo.profile, cclog, experimentsandconfigs
 ```

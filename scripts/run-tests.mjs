@@ -26,6 +26,10 @@ const suite = [
     cmd: [process.execPath, path.join(root, 'scripts/assert-no-cc-leak.mjs'), '--fixture'],
   },
   { name: 'T9 test-headers', cmd: [process.execPath, path.join(root, 'scripts/test-headers.mjs')] },
+  {
+    name: 'T10 test-oauth-client',
+    cmd: [process.execPath, path.join(root, 'scripts/test-oauth-client.mjs')],
+  },
   // 模块自检（require.main === module）
   { name: 'self antigravity-client', cmd: [process.execPath, path.join(root, 'dist/antigravity-client.js')] },
   { name: 'self tool-bridge', cmd: [process.execPath, path.join(root, 'dist/tool-bridge.js')] },

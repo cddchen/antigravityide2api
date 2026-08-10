@@ -24,6 +24,57 @@ function idePaths(): { db: string; storage: string } {
   return { db: path.join(base, 'state.vscdb'), storage: path.join(base, 'storage.json') };
 }
 
+/**
+ * IDE 主包路径（OAuth client 常量所在）。
+ * 实证 darwin：main.js 里 `B1e="…apps.googleusercontent.com",k1e="GOCSPX-…"` 相邻；
+ * 两个 language_server 二进制里只有 secret、没有配对的 id，扫不出来。
+ */
+function ideMainJsPaths(): string[] {
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    return [
+      '/Applications/Antigravity IDE.app/Contents/Resources/app/out/main.js',
+      path.join(home, 'Applications/Antigravity IDE.app/Contents/Resources/app/out/main.js'),
+    ];
+  }
+  if (process.platform === 'win32') {
+    const la = process.env.LOCALAPPDATA || '';
+    return [path.join(la, 'Programs', 'Antigravity IDE', 'resources', 'app', 'out', 'main.js')];
+  }
+  return [
+    '/usr/share/antigravity-ide/resources/app/out/main.js',
+    '/opt/Antigravity IDE/resources/app/out/main.js',
+  ];
+}
+
+let clientCache: { id: string; secret: string } | undefined;
+
+/**
+ * 从本机 IDE 安装提取 OAuth client id/secret（只读）。
+ * 不硬编码进仓库：GitHub secret scanning 拦 push（GH013），且该值随 IDE 版本可变。
+ */
+export function extractOAuthClient(): { id: string; secret: string } {
+  if (clientCache) return clientCache;
+  // 必须成对匹配 —— main.js 里还有第二个 client id（非本流程用）
+  const re =
+    /([0-9]{6,}-[a-z0-9]{16,}\.apps\.googleusercontent\.com)[\s\S]{0,64}?(GOCSPX-[A-Za-z0-9_-]{20,})/;
+  const tried: string[] = [];
+  for (const p of ideMainJsPaths()) {
+    tried.push(p);
+    if (!fs.existsSync(p)) continue;
+    // latin1：12MB 文本，跳过 utf8 解码
+    const m = fs.readFileSync(p, 'latin1').match(re);
+    if (m) {
+      clientCache = { id: m[1]!, secret: m[2]! };
+      return clientCache;
+    }
+  }
+  throw new Error(
+    `未能从本机 Antigravity IDE 提取 OAuth client（已试: ${tried.join(', ')}）。\n` +
+      '请安装 Antigravity IDE，或设置 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 覆盖。',
+  );
+}
+
 /** 只读 sqlite，严禁写回 IDE DB */
 function readOauthBlob(dbPath: string): string {
   if (!fs.existsSync(dbPath)) {
