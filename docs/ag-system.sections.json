@@ -1,0 +1,84 @@
+{
+  "_note": "Antigravity IDE 2.1.1 systemInstruction, role=\"user\", captured from Surge 2026-08-08 request 922280. Sanitized: all UUIDs -> <REDACTED-uuid> (2 occurrences). Offsets/chars reflect the sanitized file, which is 21 chars per uuid SHORTER than the wire original: 35528 + 2*(36-15) = 35570.",
+  "role": "user",
+  "totalChars": 35528,
+  "wireChars": 35570,
+  "_wireCharsCheck": "matches ag-envelope.capture.json envelope.request.systemInstruction._textChars",
+  "sections": [
+    {
+      "name": "identity",
+      "offset": 0,
+      "chars": 721
+    },
+    {
+      "name": "user_information",
+      "offset": 722,
+      "chars": 638
+    },
+    {
+      "name": "web_application_development",
+      "offset": 1361,
+      "chars": 4176
+    },
+    {
+      "name": "ephemeral_message",
+      "offset": 5538,
+      "chars": 312
+    },
+    {
+      "name": "customizations",
+      "offset": 5851,
+      "chars": 2886
+    },
+    {
+      "name": "skills",
+      "offset": 8738,
+      "chars": 1328
+    },
+    {
+      "name": "messaging",
+      "offset": 10067,
+      "chars": 810
+    },
+    {
+      "name": "knowledge_items",
+      "offset": 10878,
+      "chars": 2607
+    },
+    {
+      "name": "conversation_transcript",
+      "offset": 13486,
+      "chars": 3302
+    },
+    {
+      "name": "artifacts",
+      "offset": 16789,
+      "chars": 6069
+    },
+    {
+      "name": "slash_commands",
+      "offset": 22859,
+      "chars": 1138
+    },
+    {
+      "name": "planning_mode",
+      "offset": 23998,
+      "chars": 2477
+    },
+    {
+      "name": "planning_mode_artifacts",
+      "offset": 26476,
+      "chars": 2365
+    },
+    {
+      "name": "guidelines",
+      "offset": 28842,
+      "chars": 5584
+    },
+    {
+      "name": "communication_style",
+      "offset": 34427,
+      "chars": 1101
+    }
+  ]
+}

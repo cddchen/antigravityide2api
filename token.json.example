@@ -1,0 +1,12 @@
+{
+  "tokens": [
+    {
+      "name": "account-1",
+      "accessToken": "ya29....",
+      "refreshToken": "1//....",
+      "projectId": "",
+      "expiresAt": 0,
+      "machineId": ""
+    }
+  ]
+}

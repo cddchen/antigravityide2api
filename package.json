@@ -1,0 +1,51 @@
+{
+  "name": "antigravityide2api",
+  "version": "0.1.0",
+  "description": "Antigravity IDE Agent API → Anthropic Messages compatible proxy",
+  "main": "dist/server.js",
+  "bin": {
+    "antigravityide2api": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/native-tools.capture.json",
+    "docs/ag-system.capture.txt",
+    "docs/ag-system.sections.json",
+    "token.json.example",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "tsc --watch",
+    "extract-token": "node dist/cli.js extract-token",
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "leakcheck": "node docs/leakcheck.prototype.mjs"
+  },
+  "keywords": [
+    "antigravity",
+    "anthropic",
+    "claude",
+    "claude-code",
+    "api",
+    "proxy",
+    "messages"
+  ],
+  "author": "cddchen",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

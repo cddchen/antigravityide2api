@@ -1,0 +1,24 @@
+{
+  "_source": "Surge 2026-08-08-170054，13/13 条 streamGenerateContent 完全一致",
+  "_note": "Authorization 已脱敏。抓包无 Connection 头是 Surge 剥逐跳头所致（同抓包 42/42 条皆无），非客户端未发。",
+  "_client": "extensions/antigravity/bin/language_server_macos_arm (Mach-O arm64, go1.27 + crypto/tls)",
+  "count": 13,
+  "requestLine": "POST /v1internal:streamGenerateContent?alt=sse HTTP/1.1",
+  "path": "/v1internal:streamGenerateContent?alt=sse",
+  "headerOrder": [
+    "Host",
+    "User-Agent",
+    "Transfer-Encoding",
+    "Authorization",
+    "Content-Type",
+    "Accept-Encoding"
+  ],
+  "headers": {
+    "Host": "daily-cloudcode-pa.googleapis.com",
+    "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+    "Transfer-Encoding": "chunked",
+    "Authorization": "Bearer ya29.REDACTED",
+    "Content-Type": "application/json",
+    "Accept-Encoding": "gzip"
+  }
+}
