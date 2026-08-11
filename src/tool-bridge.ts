@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import path from 'path';
+import { parseSkillPseudoPath } from './system-prompt';
 import type {
   BridgeOutcome,
   BridgeRejection,
@@ -95,6 +96,16 @@ export function bridgeFunctionCall(
   switch (fc.name) {
     case 'view_file': {
       const file_path = str(args.AbsolutePath);
+      // 伪路径：AG system 列出的 skill SKILL.md → 路由到 CC Skill 工具
+      const skillName = parseSkillPseudoPath(file_path);
+      if (skillName) {
+        return ok({
+          toolUseId: fc.id,
+          claudeName: 'Skill',
+          input: { skill: skillName },
+          native,
+        });
+      }
       const input: Record<string, unknown> = { file_path };
       const start = num(args.StartLine);
       const end = num(args.EndLine);
@@ -230,6 +241,20 @@ function reshapeGrepSearch(
     .join('\n');
 }
 
+/**
+ * 去掉 Skill 工具的占位行与 base-directory 头。
+ * "Launching skill: foo" 与 "Base directory for this skill: /path" 对上游无意义，
+ * 且 "Base directory" 常带 ~/.claude 路径，会撞泄漏扫描。
+ */
+export function scrubSkillBody(text: string): string {
+  return text
+    .replace(/^Launching skill:.*$/gm, '')
+    .replace(/^Base directory for this skill:.*$/gm, '')
+    .replace(/^\n+/, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function reshapePayload(
   native: { id: string; name: string; args: Record<string, unknown> },
   claudeResult: string,
@@ -247,12 +272,14 @@ function reshapePayload(
 
     case 'view_file': {
       const abs = str(native.args.AbsolutePath);
-      const lineCount =
-        claudeResult.length === 0 ? 0 : claudeResult.split('\n').length;
+      // Skill 桥：CC tool_result 是 "Launching skill: X" + trailing "Base directory…"
+      // 上游期望 SKILL.md 正文；剥掉两行元数据再当文件内容回填。
+      const body = scrubSkillBody(claudeResult);
+      const lineCount = body.length === 0 ? 0 : body.split('\n').length;
       return (
         `File Path: \`${fileUri(abs)}\`\n` +
         `Total Lines: ${lineCount}\n` +
-        claudeResult
+        body
       );
     }
 
@@ -548,5 +575,61 @@ if (require.main === module) {
   ]) {
     const out = bridgeFunctionCall({ id: 'x', name, args: {} });
     assert.strictEqual(out.kind, 'reject');
+  }
+
+  // skill 伪路径 → Skill；普通路径仍 Read
+  {
+    const home = require('os').homedir() as string;
+    const skillPath = `${home}/.gemini/config/skills/deep-research/SKILL.md`;
+    const out = bridgeFunctionCall({
+      id: 'sk1',
+      name: 'view_file',
+      args: { AbsolutePath: skillPath, toolAction: 'Reading skill', toolSummary: 'Skill' },
+    });
+    assert.strictEqual(out.kind, 'tool_use');
+    if (out.kind === 'tool_use') {
+      assert.strictEqual(out.value.claudeName, 'Skill');
+      assert.deepStrictEqual(out.value.input, { skill: 'deep-research' });
+    }
+    const pluginPath = `${home}/.gemini/config/skills/plugin__foo/SKILL.md`;
+    const out2 = bridgeFunctionCall({
+      id: 'sk2',
+      name: 'view_file',
+      args: { AbsolutePath: pluginPath },
+    });
+    assert.strictEqual(out2.kind, 'tool_use');
+    if (out2.kind === 'tool_use') {
+      assert.strictEqual(out2.value.input.skill, 'plugin:foo');
+    }
+    const plain = bridgeFunctionCall({
+      id: 'sk3',
+      name: 'view_file',
+      args: { AbsolutePath: '/tmp/x.ts' },
+    });
+    assert.strictEqual(plain.kind, 'tool_use');
+    if (plain.kind === 'tool_use') assert.strictEqual(plain.value.claudeName, 'Read');
+  }
+
+  // scrubSkillBody + view_file FR 回填
+  {
+    const scrubbed = scrubSkillBody(
+      'Launching skill: demo\n\nBase directory for this skill: /Users/x/.claude/skills/demo\n# Demo\nbody',
+    );
+    assert.strictEqual(scrubbed, '# Demo\nbody');
+    const fr = buildFunctionResponse(
+      {
+        id: 'skf',
+        name: 'view_file',
+        args: {
+          AbsolutePath: `${require('os').homedir()}/.gemini/config/skills/demo/SKILL.md`,
+        },
+      },
+      'Launching skill: demo\n\nBase directory for this skill: /x\n# Demo skill\nDo things.',
+      false,
+    );
+    assert.ok(fr.response.output.includes('# Demo skill'));
+    assert.ok(!fr.response.output.includes('Launching skill'));
+    assert.ok(!fr.response.output.includes('Base directory'));
+    assert.ok(fr.response.output.includes('Total Lines: 2'));
   }
 }

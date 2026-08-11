@@ -17,10 +17,6 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3000
 export ANTHROPIC_AUTH_TOKEN=<API_KEY 或任意非空，若服务未设 API_KEY>
 ```
 
-### 坑：settings.json 的 env 优先于 shell
-
-`~/.claude/settings.json` 的 `env` 块优先级高于 shell `export`。若 CC 仍打到官方 API，要么改 settings.json 的 `env`，要么用 `CLAUDE_CONFIG_DIR` 隔离一套配置。
-
 ## CLI
 
 | 命令 | 作用 |

@@ -20,11 +20,12 @@ const ccBody = JSON.parse(
   fs.readFileSync(path.join(root, 'docs/cc-request.capture.json'), 'utf8'),
 ).body;
 
-// 4.1 trimmed length === 12400
+// 4.1 trimmed length === 12914
 // 原型实测 7563 是加 <skills> 与 RULE 拆分之前的数；这份夹具带 9 个可用 skill。
+// 12914 = 始终带 ~/.gemini/config/skills/<name>/SKILL.md 伪路径（skill 桥）后的数。
 const env = extractEnv(ccBody);
 const out = buildSystemInstruction(env, 'trimmed');
-assert.equal(out.length, 12400, `trimmed length: ${out.length}`);
+assert.equal(out.length, 12914, `trimmed length: ${out.length}`);
 
 // 4.2 与 leakcheck.prototype.mjs 的**共有部分**一致
 // 原型早于 rules/skills，输出不再逐字节相同；仍校验它没覆盖的段落原样保留，
@@ -252,8 +253,17 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   // skills 来自 messages[role=system]，不是 messages[0]
   assert.ok(e.skills.length > 0, 'skills 应非空（源在 role=system 的 message 里）');
   assert.ok(
-    e.skills.some((s) => s.name === 'architecture-diagram' && s.skillMdPath),
-    'IDE 全局 root 下的 skill 应带 SKILL.md 路径',
+    e.skills.some(
+      (s) =>
+        s.name === 'architecture-diagram' &&
+        s.skillMdPath.includes('.gemini/config/skills/architecture-diagram/SKILL.md'),
+    ),
+    'skill 应带 ~/.gemini 伪路径',
+  );
+  // 每条 skill 都有伪路径（不依赖磁盘是否真有 SKILL.md）
+  assert.ok(
+    e.skills.every((s) => s.skillMdPath.includes('.gemini/config/skills/')),
+    '全部 skill 须带伪路径',
   );
   // 操作 CC 自身的 skill 必须被丢（描述里带 Claude Code / CLAUDE.md / .claude）
   for (const n of ['update-config', 'claude-api', 'keybindings-help', 'init']) {

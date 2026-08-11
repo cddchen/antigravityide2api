@@ -834,3 +834,39 @@ T4 新增 4.15，四处变异各自变红（把 4.1 的长度断言同步改成�
 本机跑 `NODE_EXTRA_CA_CERTS`：Surge 在代理时 Node 不认它的 CA，
 `security find-certificate -a -c Surge -p /Library/Keychains/System.keychain` 导出后指过去。
 环境问题，非代码问题。
+
+## Skill 伪路径桥（2026-08-11）
+
+### 问题
+
+AG system 的 Available skills 行形态是 `- name (abs/SKILL.md): desc`，模型用
+`view_file` 读路径。CC 只给 `- name: desc`，调 `Skill{skill}`，tool_result
+是 `"Launching skill: X"`，正文是紧随的 isMeta user 文本
+`Base directory for this skill: …`。
+
+旧实现：`skillMdPathOf` 只有磁盘真有文件才填路径 → CC skill 几乎全空路径；
+续轮 CC 不重发 skill_listing（binary 进程级 Set）→ 出站 `<skills>` 消失；
+Skill 正文只剩占位句。
+
+### 决策（对标 cursoride2api attachTrailingText）
+
+| 点 | 做法 |
+|---|---|
+| 伪路径 | 始终 `~/.gemini/config/skills/<safeName>/SKILL.md`（`:`→`__`） |
+| view_file 命中 | `parseSkillPseudoPath` → `Skill{skill}`，不读盘 |
+| FR 回填 | `scrubSkillBody` 剥 Launching / Base directory，再套 File Path/Total Lines |
+| tool_result | `attachTrailingText`：仅当 content 含 `Launching skill:` 时合并尾随 user 文本 |
+| 续轮 | `skillsCacheByCwd`：有清单写缓存，无则按 cwd 回填 |
+| parseSkills | 空行结束清单（防 system-reminder 后噪声并入 description） |
+
+### 偏离
+
+- 路径前缀选 AG 真根（`~/.gemini/...`）而非 cursor 的 `/claude-code-skill/`，
+  模型在 AG system 里见过这个根，更不突兀。
+- 普通 tool_result + trailing text **不**合并 —— 旧断言保留。
+- T4 4.1 长度 12400 → 12914（9 个 skill 都加了伪路径）。
+
+### 验证
+
+`npx tsc` = 0；tool-bridge / anthropic 自检含 skill 路径与 Launching 合并；
+`run-tests.mjs` 全绿。

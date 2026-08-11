@@ -180,7 +180,10 @@ export interface ExtractedRule {
 export interface ExtractedSkill {
   name: string;
   description: string;
-  /** SKILL.md 绝对路径；解析不到就空串，只给名字 */
+  /**
+   * SKILL.md 伪路径（始终非空）：`~/.gemini/config/skills/<safeName>/SKILL.md`。
+   * 磁盘上不存在；view_file 命中后桥接为 CC Skill 工具（见 tool-bridge）。
+   */
   skillMdPath: string;
 }
 
@@ -205,7 +208,7 @@ export interface ExtractedEnv {
 export interface BridgedToolUse {
   /** CC 侧 tool_use id，与原生 FC id 双向映射 */
   toolUseId: string;
-  /** CC 实际持有的工具名：Read/Bash/Write/Edit */
+  /** CC 实际持有的工具名：Read/Bash/Write/Edit/Skill */
   claudeName: string;
   input: Record<string, unknown>;
   /** 原生侧信息，回填 FR 时要用 */

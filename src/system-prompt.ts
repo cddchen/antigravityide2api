@@ -171,11 +171,45 @@ function parseRules(claudeMd: string): ExtractedRule[] {
   return rules;
 }
 
-/** Antigravity 全局定制根（抓包实证）：<home>/.gemini/config/skills/<name>/SKILL.md */
-function skillMdPathOf(name: string): string {
-  const p = path.join(os.homedir(), '.gemini', 'config', 'skills', name, 'SKILL.md');
-  return fs.existsSync(p) ? p : '';
+/**
+ * skill 名 → 伪路径安全段。插件 skill 含 `:`（如 `plugin:skill`），
+ * 路径里 `:` 在 Windows 非法，统一换成 `__`。
+ */
+export function skillSafeName(name: string): string {
+  return name.replace(/:/g, '__');
 }
+
+/**
+ * 始终伪造 `~/.gemini/config/skills/<safeName>/SKILL.md`。
+ * 抓包里 AG 真 skill 就落在这个根下；CC skill 不存在于磁盘，
+ * view_file 命中后由 tool-bridge 改路由到 Skill 工具，不读盘。
+ */
+export function skillPseudoPath(name: string): string {
+  return path.join(
+    os.homedir(),
+    '.gemini',
+    'config',
+    'skills',
+    skillSafeName(name),
+    'SKILL.md',
+  );
+}
+
+/** 伪路径 → skill 名；非本前缀返回 null。`__` 还原为 `:`。 */
+export function parseSkillPseudoPath(rawPath: string): string | null {
+  if (!rawPath) return null;
+  // 必须 …/.gemini/config/skills/<safe>/SKILL.md（abs 或 ~ 均可）
+  const m = rawPath
+    .replace(/^file:\/\//, '')
+    .replace(/\\/g, '/')
+    .match(/(?:^|\/)\.gemini\/config\/skills\/([^/]+)\/SKILL\.md$/);
+  if (!m?.[1]) return null;
+  return m[1].replace(/__/g, ':');
+}
+
+// CC 每进程只发一次 skill_listing（binary pxd Set）。后续 /v1/messages 无清单。
+// 按 cwd 缓存，续轮 extractEnv 时回填，避免 <skills> 段消失。
+const skillsCacheByCwd = new Map<string, ExtractedSkill[]>();
 
 /**
  * skill 清单 → <skills> 的 Available skills 行。
@@ -184,6 +218,7 @@ function skillMdPathOf(name: string): string {
  * <system-reminder>（第一个是 agent types，丢）。所以要扫全部 message，不能只看首条。
  * 行形态两种：`- name` 与 `- name: description`；description 可能折行，续行不以
  * `- ` 开头（实测 deep-research 的 TRIGGER/SKIP 两行），并进上一条。
+ * 空行结束清单（cursoride2api 同款）—— 否则会把 system-reminder 后噪声并进描述。
  */
 function parseSkills(body: AnthropicMessagesRequest): ExtractedSkill[] {
   const all = (body.messages || [])
@@ -203,18 +238,23 @@ function parseSkills(body: AnthropicMessagesRequest): ExtractedSkill[] {
 
   const skills: ExtractedSkill[] = [];
   for (const line of m[1]!.split('\n')) {
+    // 空行：清单已开始则结束（防噪声并入 description）
+    if (!line.trim()) {
+      if (skills.length) break;
+      continue;
+    }
     if (line.startsWith('- ')) {
       const rest = line.slice(2);
       const i = rest.indexOf(': ');
-      const name = i >= 0 ? rest.slice(0, i) : rest.trim();
+      const name = (i >= 0 ? rest.slice(0, i) : rest).trim();
       if (!name) continue;
       skills.push({
         name,
         // 无描述项用名字兜底 —— 上游 Available skills 每行都是 `name (path): desc`
         description: i >= 0 ? rest.slice(i + 2) : name,
-        skillMdPath: skillMdPathOf(name),
+        skillMdPath: skillPseudoPath(name),
       });
-    } else if (line.trim() && skills.length > 0) {
+    } else if (skills.length > 0) {
       skills[skills.length - 1]!.description += '\n' + line.trim();
     }
   }
@@ -299,6 +339,14 @@ export function extractEnv(body: AnthropicMessagesRequest): ExtractedEnv {
   const rules = parseRules(stripped);
   const userRules = stripped.replace(/^Contents of [^\n]*:\n+/gm, '').trim();
 
+  // skill_listing 每进程只发一次：有则写缓存，无则按 cwd 回填
+  let skills = parseSkills(body);
+  if (skills.length > 0) {
+    if (cwd) skillsCacheByCwd.set(cwd, skills);
+  } else if (cwd && skillsCacheByCwd.has(cwd)) {
+    skills = skillsCacheByCwd.get(cwd)!;
+  }
+
   return {
     cwd,
     platform,
@@ -306,8 +354,13 @@ export function extractEnv(body: AnthropicMessagesRequest): ExtractedEnv {
     additionalDirs: addl,
     userRules,
     rules,
-    skills: parseSkills(body),
+    skills,
   };
+}
+
+/** 测试用：清 cwd→skills 缓存 */
+export function clearSkillsCache(): void {
+  skillsCacheByCwd.clear();
 }
 
 // ---------- 解剖日志（DUMP_SYSTEM 非空时开） ----------
@@ -445,17 +498,14 @@ function buildUserRules(rules: ExtractedRule[]): string {
 
 /**
  * <skills> —— 前言取 capture 原样，只换 Available skills 列表。
- * 有 SKILL.md 路径才带括号（模型要能 view_file 读它）；解析不到就只给名字。
+ * 每条都带伪路径括号，模型用 view_file 打开；桥接层改路由到 Skill。
  */
 function buildSkills(skills: ExtractedSkill[]): string {
   if (skills.length === 0) return '';
   const raw = section('skills');
   const head = raw.slice(0, raw.indexOf('Available skills:'));
   const lines = skills
-    .map(
-      (s) =>
-        `- ${s.name}${s.skillMdPath ? ` (${s.skillMdPath})` : ''}: ${s.description}`,
-    )
+    .map((s) => `- ${s.name} (${s.skillMdPath || skillPseudoPath(s.name)}): ${s.description}`)
     .join('\n');
   return `${head}Available skills:\n${lines}\n</skills>`;
 }

@@ -46,26 +46,74 @@ function toolResultToString(content: string | AnthropicContentBlock[] | undefine
   return '';
 }
 
+/**
+ * Skill 的 tool_result 只是 "Launching skill: X"；真正正文是同条或紧随的
+ * user text（isMeta "Base directory for this skill: …"）。只转发 tool_result
+ * 上游拿到空壳。仅当 content 含 Launching skill 时合并 trailing text，
+ * 普通 tool_result + trailing 不合并（保持旧断言）。
+ */
+function attachTrailingText(
+  hits: ParsedToolResult[],
+  messages: NonNullable<AnthropicMessagesRequest['messages']>,
+  hitIndex: number,
+): ParsedToolResult[] {
+  if (!hits.length) return hits;
+  const hasSkill = hits.some((h) => /^Launching skill:/m.test(h.content));
+  if (!hasSkill) return hits;
+
+  const texts: string[] = [];
+  for (let i = hitIndex; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'user') break;
+    if (typeof msg.content === 'string') {
+      const t = msg.content.trim();
+      if (t && !t.startsWith('<system-reminder')) texts.push(t);
+      continue;
+    }
+    for (const b of msg.content) {
+      const text = b.type === 'text' ? b.text?.trim() : '';
+      if (text && !text.startsWith('<system-reminder')) texts.push(text);
+    }
+  }
+  const extra = texts.join('\n');
+  if (!extra) return hits;
+
+  // 只并到 Launching skill 那几条
+  return hits.map((h) =>
+    /^Launching skill:/m.test(h.content)
+      ? { ...h, content: h.content ? `${h.content}\n\n${extra}` : extra }
+      : h,
+  );
+}
+
 /** 提取本轮所有 tool_result；无则返回空数组（= 首轮） */
 export function parseToolResults(body: AnthropicMessagesRequest): ParsedToolResult[] {
   const messages = body.messages;
   if (!messages?.length) return [];
 
   // 并行 tool_use 时 CC 把全部 tool_result 放在同一条 user message 里（实测）。
-  // 只看**最后一条** user message：CC 每轮回传全量历史，若继续往前扫，
-  // 工具轮结束后用户的新提问会命中上一轮的 tool_result，被误判成 resume。
+  // 从尾部扫连续 user 消息：tool_result 可能被 attachment 挤到倒数第二。
+  // 碰到非 user 就停；本段内无 tool_result → 首轮/新提问。
+  let hitIndex = -1;
+  let hits: AnthropicContentBlock[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role !== 'user') continue;
-    if (typeof msg.content === 'string') return [];
-    const hits = msg.content.filter((b) => b.type === 'tool_result' && b.tool_use_id);
-    return hits.map((b) => ({
-      toolUseId: b.tool_use_id!,
-      content: toolResultToString(b.content),
-      isError: b.is_error === true,
-    }));
+    if (msg.role !== 'user') break;
+    if (typeof msg.content === 'string') continue;
+    const found = msg.content.filter((b) => b.type === 'tool_result' && b.tool_use_id);
+    if (found.length) {
+      hits = found;
+      hitIndex = i;
+      break;
+    }
   }
-  return [];
+  if (!hits.length) return [];
+  const parsed = hits.map((b) => ({
+    toolUseId: b.tool_use_id!,
+    content: toolResultToString(b.content),
+    isError: b.is_error === true,
+  }));
+  return attachTrailingText(parsed, messages, hitIndex);
 }
 
 /** 本地时间带偏移：2026-08-08T17:01:03+08:00（不加依赖） */
@@ -418,7 +466,7 @@ if (require.main === module) {
     assert.strictEqual(buildUserContent(body), null);
   }
 
-  // 2. parseToolResults 从多块 content 抽出全部
+  // 2. parseToolResults 从多块 content 抽出全部；普通 trailing 不合并
   {
     const body: AnthropicMessagesRequest = {
       messages: [
@@ -451,7 +499,7 @@ if (require.main === module) {
     );
   }
 
-  // 工具轮结束后的新提问：只看最后一条 user，不能命中历史 tool_result
+  // 工具轮结束后的新提问：只看尾部连续 user，不能跨 assistant 命中历史 tool_result
   {
     const body: AnthropicMessagesRequest = {
       messages: [
@@ -463,6 +511,34 @@ if (require.main === module) {
       ],
     };
     assert.deepStrictEqual(parseToolResults(body), [], '新提问不能被判为 resume');
+  }
+
+  // Skill：Launching skill + 尾随 Base directory 合并
+  {
+    const body: AnthropicMessagesRequest = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'live', name: 'Skill', input: { skill: 'demo' } }],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'live', content: 'Launching skill: demo' },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Base directory for this skill: /x\n# Demo' }],
+        },
+      ],
+    };
+    const results = parseToolResults(body);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(
+      results[0].content,
+      'Launching skill: demo\n\nBase directory for this skill: /x\n# Demo',
+    );
   }
 
   // 2b. buildContents：历史文本保留、role 映射、tool 块与 role:'system' 丢弃
