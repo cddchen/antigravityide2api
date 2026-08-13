@@ -171,7 +171,7 @@ export interface ParsedToolResult {
 
 /** 一条规则 → 上游一个 <RULE[tag]> 块 */
 export interface ExtractedRule {
-  /** 方括号内的标签：全局固定 user_global，项目固定 project.md */
+  /** 方括号内的标签：md 路径（home 下相对，如 Documents/IOS/CLAUDE.md） */
   tag: string;
   body: string;
 }

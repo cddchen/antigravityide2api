@@ -109,17 +109,27 @@ export const LEAK_BLACKLIST: readonly string[] = [
   'sonnet',
 ];
 
+/**
+ * 用户/项目 md 正文会进 `<RULE[path]>`，模板句常带 `Claude Code`、
+ * 文档路径常带 `/.claude`。那是用户内容不是 harness 泄漏，扫描前整块剥掉
+ *（含开闭标签，避免 tag 里的 `.claude/CLAUDE.md` 误杀）。
+ */
+function withoutRuleBlocks(text: string): string {
+  return text.replace(/<RULE\[[^\]]*\]>[\s\S]*?<\/RULE\[[^\]]*\]>/g, '');
+}
+
 export function scanLeaks(
   text: string,
 ): Array<{ word: string; index: number; context: string }> {
+  const haystack = withoutRuleBlocks(text);
   const hits: Array<{ word: string; index: number; context: string }> = [];
   for (const word of LEAK_BLACKLIST) {
     let i = -1;
-    while ((i = text.indexOf(word, i + 1)) !== -1) {
+    while ((i = haystack.indexOf(word, i + 1)) !== -1) {
       hits.push({
         word,
         index: i,
-        context: text
+        context: haystack
           .slice(Math.max(0, i - 60), i + word.length + 60)
           .replace(/\n/g, '\\n'),
       });
@@ -139,24 +149,30 @@ function systemToText(
 }
 
 /**
+ * `Contents of <abs> (...)` → 出站 `<RULE[tag]>` 的 tag。
+ * home 下用相对路径（`Documents/IOS/CLAUDE.md`）；否则去掉开头 `/`。
+ * 不用 basename：多份 CLAUDE.md 会撞名。
+ */
+export function ruleTagFromPath(raw: string): string {
+  const n = path.normalize(raw.trim()).replace(/\\/g, '/');
+  if (!n) return 'unknown.md';
+  const home = os.homedir().replace(/\\/g, '/');
+  if (n === home) return path.basename(n);
+  if (n.startsWith(home + '/')) return n.slice(home.length + 1);
+  return n.replace(/^\//, '');
+}
+
+/**
  * claudeMd 段 → 按 `Contents of <path> (<label>):` 切成多条规则。
- *
- * 实测（/tmp/cc-live.json，CLAUDE_CONFIG_DIR 隔离 + 双 CLAUDE.md）标签只有两种：
- *   Contents of /tmp/ccconf2/CLAUDE.md (user's private global instructions for all projects):
- *   Contents of /private/tmp/ccprobe2/CLAUDE.md (project instructions, checked into the codebase):
- * 对应抓包 surge-conversation.json 的 <RULE[user_global]> / <RULE[code-style.md]>。
- *
- * tag 不能用真实 basename —— 项目那份就叫 CLAUDE.md，`RULE[CLAUDE.md]` 是明牌。
- * 全局固定 user_global（与 IDE 一致），项目固定 project.md。
+ * tag 用 md 路径（home 相对），不再用 user_global / project.md。
  */
 function parseRules(claudeMd: string): ExtractedRule[] {
   const rules: ExtractedRule[] = [];
-  // 头行本身要连路径一起丢，只留 label 判 global/project
-  const re = /^Contents of [^\n]*?\(([^)]*)\):\n/gm;
-  const heads: Array<{ label: string; start: number; end: number }> = [];
+  const re = /^Contents of (.+?) \([^)]*\):\n/gm;
+  const heads: Array<{ filePath: string; start: number; end: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(claudeMd)) !== null) {
-    heads.push({ label: m[1]!, start: m.index, end: m.index + m[0].length });
+    heads.push({ filePath: m[1]!, start: m.index, end: m.index + m[0].length });
   }
   for (let i = 0; i < heads.length; i++) {
     const body = claudeMd
@@ -164,7 +180,7 @@ function parseRules(claudeMd: string): ExtractedRule[] {
       .trim();
     if (!body) continue;
     rules.push({
-      tag: /global/i.test(heads[i]!.label) ? 'user_global' : 'project.md',
+      tag: ruleTagFromPath(heads[i]!.filePath),
       body,
     });
   }
@@ -330,8 +346,8 @@ export function extractEnv(body: AnthropicMessagesRequest): ExtractedEnv {
   });
 
   // 原型 L50-54：剥 CC 两行包装头；ExtractedEnv.userRules 已是正文
-  // 顺序不能反：parseRules 要靠 `Contents of …(label):` 判 global/project，
-  // 先 replace 掉标签就没了。userRules 保留是为了兼容旧断言与 short 模式。
+  // 顺序不能反：parseRules 要靠 `Contents of <path> (label):` 抽路径当 tag，
+  // 先 replace 掉头就没了。userRules 保留是为了兼容旧断言与 short 模式。
   const stripped = claudeMd.replace(
     /^Codebase and user instructions are shown below[^\n]*\n+/,
     '',

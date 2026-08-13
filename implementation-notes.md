@@ -870,3 +870,26 @@ Skill 正文只剩占位句。
 
 `npx tsc` = 0；tool-bridge / anthropic 自检含 skill 路径与 Launching 合并；
 `run-tests.mjs` 全绿。
+
+
+## RULE tag 改为 md 路径 + scanLeaks 豁免 RULE 正文（2026-08-13）
+
+真机 500：`iphone-nova-source` 跑 CC 时，父目录 `IOS/CLAUDE.md` 与项目
+`CLAUDE.md` 都被抽进 `<user_rules>`。两份都是 CC 生成器模板句
+`guidance to Claude Code`，父目录还写了
+`` `/Users/cddchen/.claude/docs/CIPFoundation.md` ``，撞上黑名单 2 类词。
+
+### 决策
+
+1. **tag = md 路径**，不再用 `user_global` / `project.md`。home 下相对
+   （`Documents/IOS/CLAUDE.md`），否则去掉开头 `/`。多份 CLAUDE.md 靠路径区分。
+2. **`scanLeaks` 扫描前剥掉整块 `<RULE[…]>…</RULE[…]>`**（含标签）。
+   用户 CLAUDE.md 不是 harness 泄漏；tag 里的 `.claude/CLAUDE.md` 也不该 500。
+   skill 描述仍走原黑名单（没有 RULE 包装）。
+
+### 偏离
+
+- 抓包是 `<RULE[user_global]>` / `<RULE[code-style.md]>`。路径 tag 会把
+  `CLAUDE.md` 送到上游，但不再 500 误杀真实项目文档。
+- T4 4.1 不再钉死 trimmed 长度魔数（tag 变长）；改断言路径 tag。
+- 新增 4.16：RULE 正文含 `Claude Code` + `/.claude` 时 `scanLeaks` 仍为空。

@@ -14,18 +14,20 @@ const {
   buildSystemInstruction,
   scanLeaks,
   LEAK_BLACKLIST,
+  ruleTagFromPath,
 } = sp;
 
 const ccBody = JSON.parse(
   fs.readFileSync(path.join(root, 'docs/cc-request.capture.json'), 'utf8'),
 ).body;
 
-// 4.1 trimmed length === 12914
-// 原型实测 7563 是加 <skills> 与 RULE 拆分之前的数；这份夹具带 9 个可用 skill。
-// 12914 = 始终带 ~/.gemini/config/skills/<name>/SKILL.md 伪路径（skill 桥）后的数。
+// 4.1 夹具只有一份 /private/tmp/ccprobe/CLAUDE.md；tag 用 md 路径钉死。
 const env = extractEnv(ccBody);
 const out = buildSystemInstruction(env, 'trimmed');
-assert.equal(out.length, 12914, `trimmed length: ${out.length}`);
+assert.ok(
+  out.includes(`<RULE[${ruleTagFromPath('/private/tmp/ccprobe/CLAUDE.md')}]>`),
+  '夹具项目规则 tag 须是 md 路径',
+);
 
 // 4.2 与 leakcheck.prototype.mjs 的**共有部分**一致
 // 原型早于 rules/skills，输出不再逐字节相同；仍校验它没覆盖的段落原样保留，
@@ -229,20 +231,20 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   assert.deepEqual(scanLeaks(si2), [], 'cwd 为 ~/.claude 时也不得命中');
 }
 
-// 4.15 CC rules/skills → Antigravity <RULE[...]> / <skills>
+// 4.15 CC rules/skills → Antigravity <RULE[md路径]> / <skills>
 // 夹具 docs/cc-rules-skills.capture.json：全局+项目双 CLAUDE.md、15 个 skill。
-// 对照 surge-conversation.json 的真实 system（RULE[user_global] / RULE[code-style.md] / skills）。
 {
   const body = JSON.parse(
     fs.readFileSync(path.join(root, 'docs/cc-rules-skills.capture.json'), 'utf8'),
   ).body;
   const e = extractEnv(body);
 
-  // 两条规则，global 在前，tag 不能是真实 basename（CLAUDE.md 是明牌）
+  const globalTag = ruleTagFromPath('/tmp/ccconf2/CLAUDE.md');
+  const projectTag = ruleTagFromPath('/private/tmp/ccprobe2/CLAUDE.md');
   assert.deepEqual(
     e.rules.map((r) => r.tag),
-    ['user_global', 'project.md'],
-    'rules 应拆成 user_global + project.md',
+    [globalTag, projectTag],
+    'rules tag 须是 md 路径而非 user_global/project.md',
   );
   assert.ok(e.rules[0].body.includes('全局规则'), 'global 规则正文');
   assert.ok(e.rules[1].body.includes('项目级规则'), 'project 规则正文');
@@ -271,15 +273,16 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   }
 
   const si = buildSystemInstruction(e, 'trimmed');
-  assert.ok(si.includes('<RULE[user_global]>'), '应含 <RULE[user_global]>');
-  assert.ok(si.includes('<RULE[project.md]>'), '应含 <RULE[project.md]>');
+  assert.ok(si.includes(`<RULE[${globalTag}]>`), `应含 <RULE[${globalTag}]>`);
+  assert.ok(si.includes(`<RULE[${projectTag}]>`), `应含 <RULE[${projectTag}]>`);
   assert.ok(
     si.includes('MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION'),
     'user_rules 须带抓包里的前言',
   );
   assert.ok(si.includes('Available skills:'), '应含 skills 列表');
   assert.deepEqual(scanLeaks(si), [], '组装后不得命中黑名单');
-  assert.ok(!si.includes('CLAUDE.md'), '不得出现 CLAUDE.md 字样');
+  assert.ok(!si.includes('<RULE[user_global]>'), '不得再使用 user_global');
+  assert.ok(!si.includes('<RULE[project.md]>'), '不得再使用 project.md');
 
   // 位置：user_rules 与 skills 在 ephemeral 之后、guidelines 之前（抓包顺序）
   const at = (t) => si.indexOf(t);
@@ -291,4 +294,33 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   );
 }
 
-console.log('PASS test-system.mjs (15 assertion groups)');
+// 4.16 RULE 正文豁免：用户 CLAUDE.md 模板句 / 文档路径不得误杀请求
+{
+  const homeRel = ruleTagFromPath(path.join(os.homedir(), 'Documents/IOS/CLAUDE.md'));
+  assert.equal(homeRel, 'Documents/IOS/CLAUDE.md', 'home 下须相对路径');
+  const si = buildSystemInstruction(
+    {
+      cwd: '/tmp/proj',
+      platform: 'darwin',
+      isGitRepo: true,
+      additionalDirs: [],
+      userRules: '',
+      rules: [
+        {
+          tag: homeRel,
+          body:
+            'This file provides guidance to Claude Code (claude.ai/code).\n' +
+            'See `/Users/cddchen/.claude/docs/CIPFoundation.md`.',
+        },
+      ],
+      skills: [],
+    },
+    'trimmed',
+  );
+  assert.ok(si.includes(`<RULE[${homeRel}]>`));
+  assert.ok(si.includes('Claude Code'));
+  assert.ok(si.includes('/.claude'));
+  assert.deepEqual(scanLeaks(si), [], 'RULE 正文里的黑名单词不得命中');
+}
+
+console.log('PASS test-system.mjs (16 assertion groups)');
