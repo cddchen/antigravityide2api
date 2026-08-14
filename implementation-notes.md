@@ -8,11 +8,11 @@
 - **禁止：** CLIProxyAPI 式「把 Claude Code `tools[]` 原样上传 + args 透传」。
 - **原因（用户确认）：** 该路径易被识别/封号；且与「IDE→服务器流程导出」目标不一致。
 - **做法：**
-  1. 请求注入 **原生** `functionDeclarations`（14 tools，见 `docs/native-tools.capture.json`）
-  2. 上游 `functionCall` → Claude `tool_use`（字段映射）
-  3. Claude `tool_result` → 原生 `functionResponse.{output}`
-  4. `pending-session` 多轮直到 end_turn
-  5. envelope / OAuth / SSE 可参考 CLIProxy **规格事实**，不参考其工具哲学
+1. 请求注入 **原生** `functionDeclarations`（14 tools，见 `docs/native-tools.capture.json`）
+2. 上游 `functionCall` → Claude `tool_use`（字段映射）
+3. Claude `tool_result` → 原生 `functionResponse.{output}`
+4. `pending-session` 多轮直到 end_turn
+5. envelope / OAuth / SSE 可参考 CLIProxy **规格事实**，不参考其工具哲学
 
 ### 与首轮调研文档的关系
 
@@ -111,8 +111,8 @@
 
 ```
 [无 sig] 400 INVALID_ARGUMENT
-  "Function call is missing a thought_signature in functionCall parts.
-   ... function call `default_api:list_dir`, position 2"
+"Function call is missing a thought_signature in functionCall parts.
+ ... function call `default_api:list_dir`, position 2"
 [带 sig] 200
 ```
 
@@ -167,7 +167,7 @@ schema 声明 `BOOLEAN`，IDE 抓包实发 `"False"`（字符串）。跟 IDE，
 node /tmp/cc-sink.mjs &                      # 127.0.0.1:8787，落盘 body 并回假 SSE
 mkdir -p /tmp/ccconf && cat > /tmp/ccconf/settings.json <<'X'
 {"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8787","ANTHROPIC_AUTH_TOKEN":"dummy",
-        "ANTHROPIC_MODEL":"probe-model","ANTHROPIC_SMALL_FAST_MODEL":"probe-model"}}
+      "ANTHROPIC_MODEL":"probe-model","ANTHROPIC_SMALL_FAST_MODEL":"probe-model"}}
 X
 cd /tmp/ccprobe && CLAUDE_CONFIG_DIR=/tmp/ccconf claude -p "hi" </dev/null
 ```
@@ -190,13 +190,13 @@ cd /tmp/ccprobe && CLAUDE_CONFIG_DIR=/tmp/ccconf claude -p "hi" </dev/null
 POST /v1/messages?beta=true
 user-agent: claude-cli/2.1.204 (external, sdk-cli)
 anthropic-beta: claude-code-20250219, interleaved-thinking-2025-05-14,
-  thinking-token-count-2026-05-13, context-management-2025-06-27,
-  prompt-caching-scope-2026-01-05, mid-conversation-system-2026-04-07, effort-2025-11-24
+thinking-token-count-2026-05-13, context-management-2025-06-27,
+prompt-caching-scope-2026-01-05, mid-conversation-system-2026-04-07, effort-2025-11-24
 ```
 
 - `system[0]` 74 字符：`x-anthropic-billing-header: cc_version=2.1.204.5a9; cc_entrypoint=sdk-cli;`
 - `system[1]` 62 字符：`You are a Claude agent, built on Anthropic's Claude Agent SDK.`
-  —— `-p` 走 sdk-cli 入口用 `$zc`；交互 TUI 用 `NUUi`（`You are Claude Code, Anthropic's official CLI for Claude.`）
+—— `-p` 走 sdk-cli 入口用 `$zc`；交互 TUI 用 `NUUi`（`You are Claude Code, Anthropic's official CLI for Claude.`）
 - `system[2]` 5618 字符：`# Harness` / `# Session-specific guidance` / `# Memory`(2100) / `# Environment` / `# Context management`
 - `tools[]` 25 个：Agent Bash CronCreate CronDelete CronList DesignSync Edit EnterWorktree ExitWorktree NotebookEdit Read ReportFindings ScheduleWakeup SendMessage Skill TaskCreate TaskGet TaskList TaskOutput TaskStop TaskUpdate WebFetch WebSearch Workflow Write
 - `messages[1].role == "system"`（6600 字符 agent types 清单）—— `mid-conversation-system` beta 的产物，上游 `contents[]` 只认 user/model，**只能丢**
@@ -533,24 +533,24 @@ byte-identical to leakcheck.prototype.mjs output = true
 ### 架构师本轮改的 4 处代码
 
 1. **`src/anthropic.ts` `parseToolResults` 逻辑 bug**
-   原实现从后往前扫**所有** user message 找 tool_result。CC 每轮回传全量历史，
-   工具轮结束后用户的新提问会命中上一轮 tool_result → 被误判成 resume → 400。
-   改为只看**最后一条** user message。已补自检。
+ 原实现从后往前扫**所有** user message 找 tool_result。CC 每轮回传全量历史，
+ 工具轮结束后用户的新提问会命中上一轮 tool_result → 被误判成 resume → 400。
+ 改为只看**最后一条** user message。已补自检。
 
 2. **`src/anthropic.ts` 新增 `buildContents`，server 首轮改用它**
-   `buildUserContent` 只取最后一条 user，纯文本多轮上下文全丢（验收标准第 2 条要求文本多轮可用）。
-   `buildContents` 搬历史文本、`assistant→model`、丢 `role:'system'`、只有最后一条包 `<USER_REQUEST>`。
-   **只搬文本**：历史 tool_use/tool_result 一律丢 —— 回放 FC 需 thoughtSignature，CC transcript 里没有，硬塞必 400。
-   代价：工具轮后再提问，模型看不到工具细节，只看到文本结论。
+ `buildUserContent` 只取最后一条 user，纯文本多轮上下文全丢（验收标准第 2 条要求文本多轮可用）。
+ `buildContents` 搬历史文本、`assistant→model`、丢 `role:'system'`、只有最后一条包 `<USER_REQUEST>`。
+ **只搬文本**：历史 tool_use/tool_result 一律丢 —— 回放 FC 需 thoughtSignature，CC transcript 里没有，硬塞必 400。
+ 代价：工具轮后再提问，模型看不到工具细节，只看到文本结论。
 
 3. **`src/server.ts` 风控前置**
-   `assertSafeToSend` 原本只在 `runGenerateLoop` 内、SSE 头已发之后。命中泄漏时返不了 500，
-   只能把错误写进流。改为**开流前**再调一次（loop 内保留，覆盖 reject 续轮）。
+ `assertSafeToSend` 原本只在 `runGenerateLoop` 内、SSE 头已发之后。命中泄漏时返不了 500，
+ 只能把错误写进流。改为**开流前**再调一次（loop 内保留，覆盖 reject 续轮）。
 
 4. **`src/server.ts` token entry 缓存 + `src/cli.ts` status 不再强制 token**
-   `firstTokenEntry()` 每请求 `loadTokenFile()` 造新对象，`ensureProjectId` 写在 entry 上的
-   `projectId` 缓存被丢弃 → 每个请求多打一次 `loadCodeAssist`。改为按 mtime 缓存 entry 对象。
-   `cli status`/`stop` 是诊断命令，缺 token 也应能看，移到 `ensureTokenFileOrExit` 之前。
+ `firstTokenEntry()` 每请求 `loadTokenFile()` 造新对象，`ensureProjectId` 写在 entry 上的
+ `projectId` 缓存被丢弃 → 每个请求多打一次 `loadCodeAssist`。改为按 mtime 缓存 entry 对象。
+ `cli status`/`stop` 是诊断命令，缺 token 也应能看，移到 `ensureTokenFileOrExit` 之前。
 
 ### 验收标准核对
 | 项 | 状态 | 证据 |
@@ -589,11 +589,11 @@ Host / User-Agent / Transfer-Encoding: chunked / Authorization / Content-Type / 
 两处改动，各有实测依据：
 
 1. **弃用 `fetch`（undici）改 `node:http`**。undici 无条件注入 `accept: */*`、
-   `accept-language: *`、`sec-fetch-mode: cors`，且 `sec-fetch-mode` 无法覆盖
-   （实测置空串仍输出 `cors`）。三个头全是浏览器语义，Go 客户端不可能发。
+ `accept-language: *`、`sec-fetch-mode: cors`，且 `sec-fetch-mode` 无法覆盖
+ （实测置空串仍输出 `cors`）。三个头全是浏览器语义，Go 客户端不可能发。
 2. **显式写 `Host` + `req.removeHeader('connection')`**。node:http 自动补的 Host
-   排在**末尾**（实测），抓包在首位；Node 还会追加 `Connection: close`，Go net/http
-   两者都不发。
+ 排在**末尾**（实测），抓包在首位；Node 还会追加 `Connection: close`，Go net/http
+ 两者都不发。
 
 抓包里没有 `Connection` 一度被我当成「IDE 不发」——**是 Surge 剥逐跳头**：
 同一份抓包 42/42 条请求全无 Connection，含 Chromium 系的 Comet Helper。
@@ -627,7 +627,7 @@ OpenSSL **编不出** ext 18(SCT)、50(sig_algs_cert)，**去不掉** 45(psk_key
 ```
 13x streamGenerateContent    Host|UA|Transfer-Encoding|Auth|Content-Type|Accept-Encoding
 13x recordCodeAssistMetrics  Host|UA|Content-Length   |Auth|Content-Type|Accept-Encoding
- 4x listExperiments          Host|UA|Content-Length   |Auth|Content-Type|Accept-Encoding
+4x listExperiments          Host|UA|Content-Length   |Auth|Content-Type|Accept-Encoding
 ```
 
 唯一区别是成帧头。故 `postStream` 加 `chunked` 参数（默认 true），
@@ -646,9 +646,9 @@ Google 通用 OAuth 端点，不属于 cloudcode-pa 指纹面。
 真机首个请求返回 `500 loadCodeAssist 失败 (HTTP 401)`，本该 refresh 自愈。两个原因叠加：
 
 1. `ensureProjectId` 的 !ok 分支抛**裸 `Error`**，没有 `.status`。
-   `withAuth` 按 `err.status === 401` 判定 → 永远为 false。
+ `withAuth` 按 `err.status === 401` 判定 → 永远为 false。
 2. `ensureProjectId` 调用点在 `try` **外面**。它自己就会打上游、自己就会 401，
-   放在 try 外时异常直接冒泡，连 catch 都进不去。
+ 放在 try 外时异常直接冒泡，连 catch 都进不去。
 
 两处都改。改后真机 401 → refresh → 重试 → 200，一次通过。
 
@@ -690,9 +690,9 @@ thoughtSignature 回放是最大的未知项（wire-reference 标了「缺失必
 命中源不是泄漏，是**用户真实的工作目录**。CC 的 `# Environment` 段：
 
 ```
- - Additional working directories:
-  - /Users/cddchen/Documents
-  - /Users/cddchen/.claude      ← 用户自己加的
+- Additional working directories:
+- /Users/cddchen/Documents
+- /Users/cddchen/.claude      ← 用户自己加的
 ```
 
 `extractEnv` 把它抽进 `<user_information>` 的 workspace 列表，撞上黑名单的 `/.claude`。
@@ -721,12 +721,12 @@ if (paths.length === 0) paths.push(os.homedir());
 ### 仍未覆盖
 
 - `recordCodeAssistMetrics` / `listExperiments` 未实现（计划列为 P1）。
-  IDE 每轮都发，长期不发是否构成行为差异，未知。
+IDE 每轮都发，长期不发是否构成行为差异，未知。
 - 8 个未桥接工具（browser/image/schedule/…）走统一 error output，未真机触发过。
 - TLS/JA3 —— 见上节，不做。
 - **黑名单误报面**：这次是 `/.claude`。同类风险还有 `'Anthropic'`、`'sonnet'`、
-  `'opus'`、`'tool_use'` —— 用户 CLAUDE.md 或提问里写到这些词就会被杀。
-  `<user_rules>` 走的是同一个 `scanLeaks`。目前没有「用户内容豁免」机制。
+`'opus'`、`'tool_use'` —— 用户 CLAUDE.md 或提问里写到这些词就会被杀。
+`<user_rules>` 走的是同一个 `scanLeaks`。目前没有「用户内容豁免」机制。
 
 ## CC rules/skills → Antigravity `<RULE[...]>` / `<skills>`（2026-08-10）
 
@@ -763,8 +763,8 @@ if (paths.length === 0) paths.push(os.homedir());
 msg 0 user   blk 0 text  764B   ← <system-reminder> # claudeMd（两条 Contents of）
 msg 0 user   blk 1 text    2B   ← "hi"
 msg 1 system str        6807B   ← 内含 2 个 <system-reminder>
-   reminder 0  733B  Available agent types for the Agent tool:  ← 丢
-   reminder 1 6002B  The following skills are available…  ← 抽
+ reminder 0  733B  Available agent types for the Agent tool:  ← 丢
+ reminder 1 6002B  The following skills are available…  ← 抽
 ```
 
 **skill 清单不在 `messages[0]`**，在 `role:"system"` 的 message 里 —— 计划书原本把
@@ -782,31 +782,31 @@ msg 1 system str        6807B   ← 内含 2 个 <system-reminder>
 ### 四个必错点
 
 1. **不能先剥 `Contents of` 头再解析。** 原 `extractEnv` 第一步就 `replace` 掉它，
-   路径和 global/project 标签一起没了。改成先按它切段，再在每段内剥。
+ 路径和 global/project 标签一起没了。改成先按它切段，再在每段内剥。
 2. **tag 不能用真实 basename。** 项目那份文件就叫 `CLAUDE.md`，`RULE[CLAUDE.md]`
-   是明牌。全局固定 `user_global`（与 IDE 一致），项目固定 `project.md`。
-   —— 这里偏离了「照抄抓包的 `code-style.md`」：那是 gemini 侧的文件名，不该硬编码。
+ 是明牌。全局固定 `user_global`（与 IDE 一致），项目固定 `project.md`。
+ —— 这里偏离了「照抄抓包的 `code-style.md`」：那是 gemini 侧的文件名，不该硬编码。
 3. **skill 描述自带 CC 特征词。** 实测 15 个里 5 个会让 `assertSafeToSend` 抛错：
-   `update-config`→`Claude Code`、`claude-api`→`Anthropic`、
-   `keybindings-help`→`~/.claude/keybindings.json`、`init`→`CLAUDE.md`、
-   `fewer-permission-prompts`→`.claude/settings.json`。
-   在 `parseSkills` 出口过滤掉。这些本就是操作 CC 自身的 skill，对上游无意义。
+ `update-config`→`Claude Code`、`claude-api`→`Anthropic`、
+ `keybindings-help`→`~/.claude/keybindings.json`、`init`→`CLAUDE.md`、
+ `fewer-permission-prompts`→`.claude/settings.json`。
+ 在 `parseSkills` 出口过滤掉。这些本就是操作 CC 自身的 skill，对上游无意义。
 4. **过滤用的是比 `LEAK_BLACKLIST` 更严的规则**（多查 `CLAUDE.md` / `.claude`）。
-   黑名单本身不能加这两条 —— 用户 CLAUDE.md 正文首行常常就是 `# CLAUDE.md`，
-   加了会误杀 `<user_rules>`。skill 描述是 CC 自己的元数据、不含用户正文，
-   在那里收紧无副作用。
+ 黑名单本身不能加这两条 —— 用户 CLAUDE.md 正文首行常常就是 `# CLAUDE.md`，
+ 加了会误杀 `<user_rules>`。skill 描述是 CC 自己的元数据、不含用户正文，
+ 在那里收紧无副作用。
 
 ### 偏离与代价
 
 - **T4 4.2 从「与原型逐字节相同」降级为「共有段落一致」。**
-  `docs/leakcheck.prototype.mjs` 早于 rules/skills，输出必然不同了。
-  保留的断言仍能抓住 identity/user_information/ephemeral/guidelines/
-  communication_style 五段的偏离。
+`docs/leakcheck.prototype.mjs` 早于 rules/skills，输出必然不同了。
+保留的断言仍能抓住 identity/user_information/ephemeral/guidelines/
+communication_style 五段的偏离。
 - **4.1 长度 7563 → 12400。** 差值来自新增的 `<skills>`（9 个可用 skill）与
-  RULE 拆分。
+RULE 拆分。
 - **`<skills>` 从「丢弃段」改为「条件重建段」**，T4 4.7 的丢弃清单从 10 段减到 9 段。
 - `userRules` 字段保留未删 —— `rules` 为空但 `userRules` 非空时（无 `Contents of`
-  头的旧形态 body）退回单块 `<user_rules>`，旧断言 4.9/4.10 不动。
+头的旧形态 body）退回单块 `<user_rules>`，旧断言 4.9/4.10 不动。
 
 ### 验证
 
@@ -827,9 +827,9 @@ T4 新增 4.15，四处变异各自变红（把 4.1 的长度断言同步改成�
 `src/system-prompt.ts: dumpSystemAnatomy()`，默认关（首行 `if (!dest) return`）。
 
 - `DUMP_SYSTEM=1` —— 打印入站 system 各块大小与一级标题、reminder、tools 数、
-  抽出的值、出站各段来源（capture 原样 / 重建）
+抽出的值、出站各段来源（capture 原样 / 重建）
 - `DUMP_SYSTEM=<path>` —— 另存 `{inbound, extracted, outbound}` 全文，0600。
-  含 CC 关键词，只落本地磁盘，不进上游。
+含 CC 关键词，只落本地磁盘，不进上游。
 
 本机跑 `NODE_EXTRA_CA_CERTS`：Surge 在代理时 Node 不认它的 CA，
 `security find-certificate -a -c Surge -p /Library/Keychains/System.keychain` 导出后指过去。
@@ -862,7 +862,7 @@ Skill 正文只剩占位句。
 ### 偏离
 
 - 路径前缀选 AG 真根（`~/.gemini/...`）而非 cursor 的 `/claude-code-skill/`，
-  模型在 AG system 里见过这个根，更不突兀。
+模型在 AG system 里见过这个根，更不突兀。
 - 普通 tool_result + trailing text **不**合并 —— 旧断言保留。
 - T4 4.1 长度 12400 → 12914（9 个 skill 都加了伪路径）。
 
@@ -882,14 +882,54 @@ Skill 正文只剩占位句。
 ### 决策
 
 1. **tag = md 路径**，不再用 `user_global` / `project.md`。home 下相对
-   （`Documents/IOS/CLAUDE.md`），否则去掉开头 `/`。多份 CLAUDE.md 靠路径区分。
+ （`Documents/IOS/CLAUDE.md`），否则去掉开头 `/`。多份 CLAUDE.md 靠路径区分。
 2. **`scanLeaks` 扫描前剥掉整块 `<RULE[…]>…</RULE[…]>`**（含标签）。
-   用户 CLAUDE.md 不是 harness 泄漏；tag 里的 `.claude/CLAUDE.md` 也不该 500。
-   skill 描述仍走原黑名单（没有 RULE 包装）。
+ 用户 CLAUDE.md 不是 harness 泄漏；tag 里的 `.claude/CLAUDE.md` 也不该 500。
+ skill 描述仍走原黑名单（没有 RULE 包装）。
 
 ### 偏离
 
 - 抓包是 `<RULE[user_global]>` / `<RULE[code-style.md]>`。路径 tag 会把
-  `CLAUDE.md` 送到上游，但不再 500 误杀真实项目文档。
+`CLAUDE.md` 送到上游，但不再 500 误杀真实项目文档。
 - T4 4.1 不再钉死 trimmed 长度魔数（tag 变长）；改断言路径 tag。
 - 新增 4.16：RULE 正文含 `Claude Code` + `/.claude` 时 `scanLeaks` 仍为空。
+
+## `/v1/messages` 入站 tool_result 日志（2026-08-13）
+
+怀疑 CC 重放原始 messages（无 tool_result）导致反复走分支 A。在 `parseToolResults` 后打 `[in]`：
+
+- `n=` 消息条数 + 尾部最多 6 条的 `role(block types)`
+- `tool_result=0 → 分支A`，或 `tool_result=N pending=[hit|miss] → 分支B`
+- 每条 `[tr] id=… err=…` 正文空白折叠后截 160 字
+
+不改变分支语义，只观测。
+
+## `/logcat` 入站可视化（2026-08-13）
+
+终端 `[in]` 不够看整段 transcript。`DEBUG=1`（或 `true`/`yes`）启动时：
+
+- 挂 `GET /logcat`（HTML）、`/logcat/snapshot`、`/logcat/stream`（SSE）
+- 每次 `/v1/messages` 拍一帧：全部 `idx:role(kinds)` **默认折叠**，点击展开块正文（tool_use input / tool_result，单块截 12KB）
+- 尾条 `role !== user` 标「截断扫描」——跳过 trailing `role:system` 后再看
+- 不改分支 A/B；无 API key（默认 `127.0.0.1`）。环保留 20 帧。
+
+## 丢弃对话中途的 role:system（2026-08-13）
+
+CC 会在 tool_result 后追加 `role:system`（如 Task 工具闲置提醒）。旧
+`parseToolResults` 碰到非 user 就 `break` → `tool_result=0` → 误走分支 A
+（新 cascade / step=0）。`buildContents` 本来就不把这类 message 送给上游。
+
+### 决策
+
+1. **`parseToolResults` / `attachTrailingText`**：`role:system` `continue`，
+   仍在 `assistant` 处停。初始化 `body.system` 与首轮 user 里的 claudeMd
+   照旧走 `extractEnv` → `systemInstruction`。
+2. **`parseSkills`**：只读首条 assistant 之前的 `role:system`（skill 清单所在），
+   中途 system 不当 skill 源、也不拼进 contents。
+3. **logcat**：跳过 trailing system 后再标「截断扫描」。
+
+### 验证
+
+anthropic 自检：`tool_result` + 尾随 system → 仍抽出 1 条。
+logcat 自检：同夹具 → 分支 B。
+
