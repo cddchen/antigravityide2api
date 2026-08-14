@@ -8,6 +8,7 @@
 npm i && npm run build
 node dist/cli.js extract-token   # 从本机 IDE 读 OAuth → ~/.antigravityide2api/token.json (0600)
 node dist/cli.js start           # 后台；前台用 start-fg 或直接无参数
+PORT=4000 DUMP_SYSTEM=1 DEBUG=1 node dist/server.js # 调试启动，/logcat可查看对话日志
 ```
 
 Claude Code 侧：

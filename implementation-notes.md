@@ -412,7 +412,7 @@ byte-identical to leakcheck.prototype.mjs output = true
 
 ## cli / README / token.json.example（2026-08-10）
 
-`src/cli.ts` + `README.md` + `token.json.example`。
+`src/cli.ts` + `README_zh.md` + `READ.md` + `token.json.example`。
 
 ### 子命令
 - 无参数 / `start-fg`：前台
@@ -932,4 +932,10 @@ CC 会在 tool_result 后追加 `role:system`（如 Task 工具闲置提醒）�
 
 anthropic 自检：`tool_result` + 尾随 system → 仍抽出 1 条。
 logcat 自检：同夹具 → 分支 B。
+
+## 文档语言版本（2026-08-14）
+
+- `README.md` 重命名为 `README_zh.md`，保留现有中文内容（含用户此前加入的调试启动示例）。
+- 英文版按用户指定使用文件名 `READ.md`，而不是常见的 `README_en.md`。
+- `package.json` 的发布文件列表同时包含 `README_zh.md` 与 `READ.md`，避免 npm 包遗漏任一语言版本。
 

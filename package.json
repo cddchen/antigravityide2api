@@ -12,7 +12,8 @@
     "docs/ag-system.capture.txt",
     "docs/ag-system.sections.json",
     "token.json.example",
-    "README.md"
+    "README_zh.md",
+    "READ.md"
   ],
   "scripts": {
     "build": "tsc",
