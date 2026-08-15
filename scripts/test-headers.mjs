@@ -58,14 +58,19 @@ assert.equal(lines[0], `POST ${fixture.path} HTTP/1.1`, `请求行不符: ${line
 const names = lines.slice(1).map((l) => l.slice(0, l.indexOf(':')));
 assert.deepEqual(names, fixture.headerOrder, `头顺序不符:\n实际 ${names}\n期望 ${fixture.headerOrder}`);
 
-// 值：除 Host（本地 sink）与 Authorization（token）外必须一字不差
+// 值：除 Host（本地 sink）、Authorization（token）、User-Agent（跟本机 product.json）外必须一字不差
 const kv = Object.fromEntries(
   lines.slice(1).map((l) => [l.slice(0, l.indexOf(':')), l.slice(l.indexOf(':') + 2)]),
 );
 for (const [k, v] of Object.entries(fixture.headers)) {
-  if (k === 'Host' || k === 'Authorization') continue;
+  if (k === 'Host' || k === 'Authorization' || k === 'User-Agent') continue;
   assert.equal(kv[k], v, `${k} 值不符: ${kv[k]} != ${v}`);
 }
+assert.match(
+  kv['User-Agent'],
+  /^antigravity\/ide\/\S+ \S+\/\S+$/,
+  `User-Agent 形状不符: ${kv['User-Agent']}`,
+);
 assert.match(kv.Authorization, /^Bearer /, 'Authorization 必须是 Bearer');
 
 // Connection 是 Node 会自动追加、Go 不发的头 —— 必须已被 removeHeader 抹掉

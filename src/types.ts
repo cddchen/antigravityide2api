@@ -88,6 +88,31 @@ export interface AgentEnvelope {
   };
 }
 
+// ---------- fetchAvailableModels ----------
+
+/** fetchAvailableModels 返回的单个模型元数据；字段随模型能力按需出现。 */
+export interface AvailableModelInfo {
+  [key: string]: unknown;
+}
+
+/** `POST /v1internal:fetchAvailableModels` 的响应。 */
+export interface AvailableModelsResponse {
+  models: Record<string, AvailableModelInfo>;
+  defaultAgentModelId?: string;
+  agentModelSorts?: unknown[];
+  commandModelIds?: string[];
+  tabModelIds?: string[];
+  imageGenerationModelIds?: string[];
+  mqueryModelIds?: string[];
+  webSearchModelIds?: string[];
+  deprecatedModelIds?: Record<string, unknown>;
+  commitMessageModelIds?: string[];
+  audioTranscriptionModelIds?: string[];
+  experimentIds?: number[];
+  tieredModelIds?: Record<string, string[]>;
+  [key: string]: unknown;
+}
+
 /** SSE 帧：data: {"response":{...},"traceId":...} */
 export interface SseFrame {
   response?: {

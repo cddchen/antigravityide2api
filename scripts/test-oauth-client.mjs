@@ -63,4 +63,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   }
 }
 
-console.log('PASS test-oauth-client.mjs (3 assertion groups)');
+// 4. ideVersion 从 product.json 读，不读 VS Code 内核 version
+{
+  const { extractIdeVersion } = await import(path.join(root, 'dist/extract-token.js'));
+  let ver;
+  try {
+    ver = extractIdeVersion();
+  } catch (e) {
+    console.log(`SKIP 本机无 product.json: ${e.message.split('\n')[0]}`);
+  }
+  if (ver) {
+    assert.match(ver, /^\d+\.\d+\.\d+$/, `ideVersion 形状: ${ver}`);
+    assert.notEqual(ver, '1.107.0', '不能把 VS Code 内核 version 当成 ideVersion');
+    console.log(`  ideVersion=${ver}`);
+  }
+}
+
+console.log('PASS test-oauth-client.mjs (4 assertion groups)');

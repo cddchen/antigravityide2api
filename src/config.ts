@@ -3,10 +3,26 @@
 // ═══════════════════════════════════════════════
 
 import os from 'os';
+import { extractIdeVersion } from './extract-token';
 
-const IDE_VERSION = process.env.IDE_VERSION || '2.1.1';
+/**
+ * HTTP UA / loadCodeAssist.metadata.ideVersion。
+ * 默认每次启动从本机 product.json 读；IDE_VERSION 覆盖。
+ * 读不到且无 env 时回退 2.1.1，避免无 IDE 的单测/CI 直接崩。
+ */
+function resolveIdeVersion(): string {
+  const fromEnv = process.env.IDE_VERSION?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return extractIdeVersion();
+  } catch {
+    return '2.1.1';
+  }
+}
 
-/** UA: antigravity/ide/2.1.1 darwin/arm64 */
+const IDE_VERSION = resolveIdeVersion();
+
+/** UA: antigravity/ide/{ideVersion} darwin/arm64。版本必须跟 product.json，格式新旧都能 200。 */
 function buildUserAgent(): string {
   return `antigravity/ide/${IDE_VERSION} ${process.platform}/${process.arch}`;
 }

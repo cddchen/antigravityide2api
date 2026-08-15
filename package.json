@@ -11,6 +11,8 @@
     "docs/native-tools.capture.json",
     "docs/ag-system.capture.txt",
     "docs/ag-system.sections.json",
+    "docs/fetch-available-models.md",
+    "docs/fetch-available-models.capture.json",
     "token.json.example",
     "README_zh.md",
     "READ.md"

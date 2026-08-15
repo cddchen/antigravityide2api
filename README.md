@@ -42,7 +42,7 @@ export ANTHROPIC_AUTH_TOKEN=<API_KEY or any non-empty value if API_KEY is not se
 | `REQUEST_TIMEOUT` | `300000` | Upstream request timeout in milliseconds |
 | `PENDING_TIMEOUT` | `600000` | Pending-session timeout in milliseconds |
 | `ANTIGRAVITY_BASE` | `https://daily-cloudcode-pa.googleapis.com` | Upstream base URL |
-| `IDE_VERSION` | `2.1.1` | User-Agent / metadata version |
+| `IDE_VERSION` | local `product.json` `ideVersion` | User-Agent / `loadCodeAssist` metadata version; env overrides |
 | `ANTIGRAVITY_SYSTEM` | `trimmed` | System prompt: `full` / `trimmed` / `short` |
 
 ## Disclaimer

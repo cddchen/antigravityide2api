@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -217,6 +218,35 @@ function startMockUpstream() {
       receivedBodies.push({ path: pathname, body: parsed, raw });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ cloudaicompanionProject: 'fake-project' }));
+      return;
+    }
+
+    if (pathname === '/v1internal:fetchAvailableModels') {
+      receivedBodies.push({ path: pathname, body: parsed, raw, headers: req.headers });
+      const catalog = {
+        models: {
+          'mock-model-primary': {
+            displayName: 'Mock Primary',
+            model: 'MODEL_MOCK_PRIMARY',
+            apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
+            modelProvider: 'MODEL_PROVIDER_GOOGLE',
+            maxTokens: 1024,
+            supportsThinking: true,
+          },
+          'mock-model-tab': {
+            model: 'MODEL_MOCK_TAB',
+            apiProvider: 'API_PROVIDER_INTERNAL',
+            modelProvider: 'MODEL_PROVIDER_GOOGLE',
+            maxTokens: 512,
+          },
+        },
+        defaultAgentModelId: 'mock-model-primary',
+      };
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+      });
+      res.end(gzipSync(JSON.stringify(catalog)));
       return;
     }
 
@@ -439,12 +469,26 @@ async function main() {
   });
 
   // ── 6.2 /v1/models ──
-  await checkAsync('6.2 GET /v1/models → data[] 非空', async () => {
+  await checkAsync('6.2 GET /v1/models → 请求上游并返回动态 data[]', async () => {
+    const before = receivedBodies.length;
     const r = await api('/v1/models');
     assert.equal(r.status, 200);
     assert.ok(Array.isArray(r.json?.data), 'data 应为数组');
-    assert.ok(r.json.data.length > 0, 'data[] 非空');
-    assert.ok(r.json.data[0].id, 'data[0].id 存在');
+    assert.deepEqual(
+      r.json.data.map((m) => m.id),
+      ['mock-model-primary', 'mock-model-tab'],
+      '模型 id 必须来自上游 models 对象',
+    );
+    assert.equal(r.json.data[0].display_name, 'Mock Primary');
+    assert.equal(r.json.data[0].maxTokens, 1024);
+
+    const hit = receivedBodies.slice(before).find(
+      (b) => b.path === '/v1internal:fetchAvailableModels',
+    );
+    assert.ok(hit, 'mock 应收到 fetchAvailableModels');
+    assert.deepEqual(hit.body, { project: 'fake-project-prefilled' });
+    assert.equal(hit.headers['content-length'], String(Buffer.byteLength(hit.raw)));
+    assert.equal(hit.headers['transfer-encoding'], undefined);
   });
 
   // ── 6.3 鉴权 ──

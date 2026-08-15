@@ -97,7 +97,8 @@ Antigravity IDE
 | `streamGenerateContent?alt=sse` | ~13 | agent / checkpoint / tab 生成 **P0** |
 | `recordCodeAssistMetrics` | ~13 | 伴生指标 **P1 指纹** |
 | `listExperiments` | ~4 | 伴生实验配置 **P1 指纹** |
-| （未在本包）`loadCodeAssist` / `onboardUser` / `fetchAvailableModels` | — | 仍 **P0** 实现（project/模型） |
+| `fetchAvailableModels` | 3（20:49:33 / 20:49:49 / 20:49:59） | 当前 project 的实际模型目录；请求体 `{project}`，响应 gzip JSON |
+| `loadCodeAssist` / `onboardUser` | — | `loadCodeAssist` 为 project 的已有前置路径；`onboardUser` 本包未确认 |
 
 路径：`POST {base}/v1internal:{method}`。
 
@@ -422,12 +423,16 @@ POST streamGenerateContent
 
 ## 10. 模型
 
-| 抓包 model | 场景 |
-|------------|------|
-| `gemini-3.6-flash-high` | agent / checkpoint |
-| `tab_flash_lite_preview` | tab 补全 |
+上游模型目录以 `POST /v1internal:fetchAvailableModels` 为准，事实记录见 [`fetch-available-models.md`](./fetch-available-models.md)，完整 014741 响应见 [`fetch-available-models.capture.json`](./fetch-available-models.capture.json)。该响应按 project/账号变化，不能把本次 28 个 id 写成永久常量。
 
-权威列表仍以 `fetchAvailableModels` 为准。对外 `/v1/models` 可映射账号可见 id；默认 wire model 先跟抓包或配置。
+014741 的关键目录字段：
+
+- `defaultAgentModelId = gemini-3.7-flash-high`
+- `models` 有 28 个键；每个模型有 `model` enum、`apiProvider`、`modelProvider`、`quotaInfo`
+- agent 推荐排序有 14 个 id；`tabModelIds` 为 `chat_20706` / `chat_23310`
+- `deprecatedModelIds` 将 `gemini-3.1-pro-high` 指向 `gemini-pro-agent`
+
+对外 `/v1/models` 每次用当前 token 的 project 调用该 RPC，再把 `models` 对象键映射为 `data[].id`；不再使用固定模型列表。`DEFAULT_MODEL` 仍只作为 `/v1/messages` 未指定 model 时的默认值。
 
 ---
 
@@ -476,7 +481,7 @@ CLI：`extract-token` / 前台 / `start|status|stop`
 - [ ] recordCodeAssistMetrics / listExperiments
 - [ ] thoughtSignature 原样回放
 - [ ] multi_replace / read_url / search_web
-- [ ] 模型列表、429
+- [x] 动态模型列表（`fetchAvailableModels` → `/v1/models`）、429
 
 ### P2
 

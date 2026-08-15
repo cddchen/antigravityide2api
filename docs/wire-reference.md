@@ -7,6 +7,7 @@
 | 文件 | 内容 | 来源 | 脱敏 |
 |------|------|------|------|
 | [`ag-envelope.capture.json`](./ag-envelope.capture.json) | 上游请求信封结构 + `contents[]` 骨架（22 条） | Surge `2026-08-08-170054/Requests/922280…streamGenerateContent` 的 `request.dump`（纯 chunked body，**无 HTTP 头**） | 全部 UUID → `<uuid>`；`project` → 占位 |
+| [`fetch-available-models.capture.json`](./fetch-available-models.capture.json) | `fetchAvailableModels` 解压后的完整 JSON 响应（28 个模型） | Surge `2026-08-14-204936/Requests/014741…fetchAvailableModels/response.dump` | Authorization 不含；request project → `<projectId from loadCodeAssist>` |
 | [`ag-system.capture.txt`](./ag-system.capture.txt) | `systemInstruction` 全文 35528 字符（脱敏后；wire 原值 **35570**） | 同上，`request.systemInstruction.parts[0].text` | 全部 UUID → `<REDACTED-uuid>`（`<user_information>` 的 Conversation ID 与 `<artifacts>` 的 Artifact Directory Path 各一处） |
 | [`ag-system.sections.json`](./ag-system.sections.json) | 上文的 15 段 offset/长度索引 | 由 `ag-system.capture.txt` 正则切分生成 | — |
 | [`native-tools.capture.json`](./native-tools.capture.json) | 14 个原生 `functionDeclarations` | 同上，`request.tools` | 无需 |

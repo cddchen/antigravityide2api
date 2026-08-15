@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surge Conversation · streamGenerateContent</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --card: #1c212b; --border: #2a3140;
+    --text: #e7ecf3; --muted: #8b95a8; --accent: #60a5fa;
+    --user: #1e3a5f; --user-border: #3b82f6;
+    --assistant: #1a2e24; --assistant-border: #34d399;
+    --tool-call: #2a2418; --tool-call-border: #f59e0b;
+    --tool-result: #231a2e; --tool-result-border: #a78bfa;
+    --thought: #1a2430; --thought-border: #64748b;
+    --system-border: #52525b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "PingFang SC", "Noto Sans SC", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+  }
+  header.top {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(15,17,21,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px 10px;
+  }
+  header.top h1 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  header.top p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab {
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); border-color: #3b4558; }
+  .tab.active { color: #fff; background: #243044; border-color: var(--accent); }
+  main { max-width: 920px; margin: 0 auto; padding: 18px 16px 60px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .session-meta {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
+    font-size: 12px; color: var(--muted); display: grid; gap: 6px;
+  }
+  .session-meta code {
+    color: #cbd5e1; font-size: 11px; word-break: break-all;
+  }
+  .msg {
+    background: var(--card); border: 1px solid var(--border);
+    border-left-width: 3px; border-radius: 10px; margin: 12px 0; overflow: hidden;
+  }
+  .msg > header {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted);
+  }
+  .msg .role { font-weight: 600; color: var(--text); }
+  .msg .body { padding: 12px 14px; font-size: 14px; }
+  .msg.user {
+    border-left-color: var(--user-border);
+    background: linear-gradient(90deg, var(--user), var(--card) 40%);
+  }
+  .msg.assistant {
+    border-left-color: var(--assistant-border);
+    background: linear-gradient(90deg, var(--assistant), var(--card) 40%);
+  }
+  .msg.tool_call {
+    border-left-color: var(--tool-call-border);
+    background: linear-gradient(90deg, var(--tool-call), var(--card) 40%);
+  }
+  .msg.tool_result {
+    border-left-color: var(--tool-result-border);
+    background: linear-gradient(90deg, var(--tool-result), var(--card) 40%);
+  }
+  .msg.thought {
+    border-left-color: var(--thought-border);
+    background: linear-gradient(90deg, var(--thought), var(--card) 40%);
+  }
+  .msg.system { border-left-color: var(--system-border); opacity: .95; }
+  .tool-name {
+    display: inline-block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: rgba(0,0,0,.35); border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 8px; margin-bottom: 8px;
+    color: #fde68a; font-size: 13px;
+  }
+  pre.raw {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.45; color: #d1d5db;
+    background: rgba(0,0,0,.25); border-radius: 8px; padding: 10px;
+    max-height: 480px; overflow: auto;
+  }
+  pre.code {
+    background: #0b0d11; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px;
+  }
+  code.inline {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: rgba(0,0,0,.35); padding: 1px 5px; border-radius: 4px;
+    font-size: .9em;
+  }
+  details { margin-top: 8px; }
+  details summary {
+    cursor: pointer; color: var(--muted); font-size: 12px; user-select: none;
+  }
+  details summary:hover { color: var(--text); }
+  .thought-body { color: #cbd5e1; font-style: italic; }
+  .md { word-wrap: break-word; }
+  footer {
+    max-width: 920px; margin: 0 auto; padding: 0 16px 40px;
+    color: var(--muted); font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Antigravity · streamGenerateContent 对话回放</h1>
+  <p>Source: Surge Catpure/2026-08-14-222445/Requests · 1 streamGenerateContent requests
+     · model gemini-3.7-flash-high</p>
+  <div class="tabs">
+    <button class="tab active" data-tab="s0">#17192 · 22.24.57 · 4 msgs</button>
+  </div>
+</header>
+<main>
+<section class="panel active" id="s0">
+    <div class="session-meta">
+      <div><b>Request ID</b> <code>agent/b2dcbe9e-3bc7-429e-9c5f-897946369929/1786717525895/01c45644-af7e-44c9-a66a-5dc15ba74535/3</code></div>
+      <div><b>Kind</b> agent
+        &nbsp; <b>Step</b> 3
+        &nbsp; <b>Conversation</b> <code>01c45644-af7e-44c9-a66a-5dc15ba74535</code></div>
+      <div><b>Agent</b> <code>b2dcbe9e-3bc7-429e-9c5f-897946369929</code>
+        &nbsp; <b>Project</b> <code>fluent-falcon-nrl9f</code></div>
+      <div><b>Model</b> <code>gemini-3.7-flash-high</code></div>
+      <div><b>Time</b> 22.24.57
+        &nbsp; <b>Status</b> Completed</div>
+      <div><b>Messages</b> 4
+        &nbsp; <b>Response chars</b> 67</div>
+    </div>
+    <article class="msg system" id="s17192-m0">
+      <header>
+        <span class="role">System Prompt</span>
+        <span class="idx">#0</span>
+        <span class="chars">28,671 chars</span>
+        
+      </header>
+      <div class="body"><details><summary>system prompt (28,671 chars) — click to expand</summary><pre class="raw">&lt;identity&gt;
+You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.
+You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
+The USER will send you requests, which you must always prioritize addressing. User requests are enclosed within &lt;USER_REQUEST&gt; tags. Along with each USER request, we will attach additional metadata about their current state, such as what files they have open and where their cursor is.
+This information may or may not be relevant to the coding task, it is up for you to decide.
+&lt;/identity&gt;
+&lt;user_information&gt;
+The USER&#x27;s OS version is mac.
+The user has 1 active workspaces, each defined by a URI and a CorpusName. Multiple URIs potentially map to the same CorpusName. The mapping is shown as follows in the format [URI] -&gt; [CorpusName]:
+/Users/cdd/Documents/antigravityide2api -&gt; cddchen/antigravityide2api
+Code relating to the user&#x27;s requests should be written in the locations listed above. Avoid writing project code files to tmp, in the .gemini dir, or directly to the Desktop and similar folders unless explicitly asked.
+App Data Directory: /Users/cdd/.gemini/antigravity-ide
+Conversation ID: b2dcbe9e-3bc7-429e-9c5f-897946369929
+&lt;/user_information&gt;
+&lt;web_application_development&gt;
+## Technology Stack,
+Your web applications should be built using the following technologies:,
+1. **Core**: Use HTML for structure and Javascript for logic.
+2. **Styling (CSS)**: Use Vanilla CSS for maximum flexibility and control. Avoid using TailwindCSS unless the USER explicitly requests it; in this case, first confirm which TailwindCSS version to use.
+3. **Web App**: If the USER specifies that they want a more complex web app, use a framework like Next.js or Vite. Only do this if the USER explicitly requests a web app.
+4. **New Project Creation**: If you need to use a framework for a new app, use `npx` with the appropriate script, but there are some rules to follow:,
+   - Use `npx -y` to automatically install the script and its dependencies
+   - You MUST run the command with `--help` flag to see all available options first, 
+   - Initialize the app in the current directory with `./` (example: `npx -y create-vite-app@latest ./`),
+   - You should run in non-interactive mode so that the user doesn&#x27;t need to input anything,
+5. **Running Locally**: When running locally, use `npm run dev` or equivalent dev server. Only build the production bundle if the USER explicitly requests it or you are validating the code for correctness.
+
+# Design Aesthetics,
+1. **Use Rich Aesthetics**: The USER should be wowed at first glance by the design. Use best practices in modern web design (e.g. vibrant colors, dark modes, glassmorphism, and dynamic animations) to create a stunning first impression. Failure to do this is UNACCEPTABLE.
+2. **Prioritize Visual Excellence**: Implement designs that will WOW the user and feel extremely premium:
+		- Avoid generic colors (plain red, blue, green). Use curated, harmonious color palettes (e.g., HSL tailored colors, sleek dark modes).
+   - Using modern typography (e.g., from Google Fonts like Inter, Roboto, or Outfit) instead of browser defaults.
+		- Use smooth gradients,
+		- Add subtle micro-animations for enhanced user experience,
+3. **Use a Dynamic Design**: An interface that feels responsive and alive encourages interaction. Achieve this with hover effects and interactive elements. Micro-animations, in particular, are highly effective for improving user engagement.
+4. **Premium Designs**. Make a design that feels premium and state of the art. Avoid creating simple minimum viable products.
+4. **Don&#x27;t use placeholders**. If you need an image, use your generate_image tool to create a working demonstration.,
+
+## Implementation Workflow,
+Follow this systematic approach when building web applications:,
+1. **Plan and Understand**:,
+		- Fully understand the user&#x27;s requirements,
+		- Draw inspiration from modern, beautiful, and dynamic web designs,
+		- Outline the features needed for the initial version,
+2. **Build the Foundation**:,
+		- Start by creating/modifying `index.css`,
+		- Implement the core design system with all tokens and utilities,
+3. **Create Components**:,
+		- Build necessary components using your design system,
+		- Ensure all components use predefined styles, not ad-hoc utilities,
+		- Keep components focused and reusable,
+4. **Assemble Pages**:,
+		- Update the main application to incorporate your design and components,
+		- Ensure proper routing and navigation,
+		- Implement responsive layouts,
+5. **Polish and Optimize**:,
+		- Review the overall user experience,
+		- Ensure smooth interactions and transitions,
+		- Optimize performance where needed,
+
+## SEO Best Practices,
+Automatically implement SEO best practices on every page:,
+- **Title Tags**: Include proper, descriptive title tags for each page,
+- **Meta Descriptions**: Add compelling meta descriptions that accurately summarize page content,
+- **Heading Structure**: Use a single `&lt;h1&gt;` per page with proper heading hierarchy,
+- **Semantic HTML**: Use appropriate HTML5 semantic elements,
+- **Unique IDs**: Ensure all interactive elements have unique, descriptive IDs for browser testing,
+- **Performance**: Ensure fast page load times through optimization,
+CRITICAL REMINDER: AESTHETICS ARE VERY IMPORTANT. If your web app looks simple and basic then you have FAILED!
+&lt;/web_application_development&gt;
+&lt;customizations&gt;
+The user can customize your behavior through **customizations**, which consist of **Skills** and **Rules**. This section explains how customizations are discovered and created.
+
+## Customization Roots
+Customizations are automatically discovered and loaded from the following customization roots:
+1. **Global Customizations Root**:
+   - Path: &quot;/Users/cdd/.gemini/config&quot;
+2. **Workspace Customizations Root**:
+   - Path: &quot;.agents&quot; (relative to the workspace root)
+
+## Customization Elements
+Within any of the customization roots above, you can define:
+1. **Skills** (Directories):
+   - Location: &quot;skills/&lt;skill_name&gt;/&quot; (relative to the customization root).
+   - Purpose: Cheatsheets for specific workflows, loaded on-demand.
+   - Contents: Must contain a &quot;SKILL.md&quot; file (instructions with YAML frontmatter).
+2. **Rules** (Markdown Files):
+   - Location: &quot;rules/&quot; (relative to the customization root) or standalone &quot;GEMINI.md&quot;/&quot;AGENTS.md&quot; files.
+   - Purpose: Style guidelines, behavioral constraints, and general instructions.
+3. **Plugins** (Directories):
+   - Location: &quot;plugins/&lt;plugin_name&gt;/&quot; (relative to the customization root).
+   - Purpose: Namespaced bundles of skills, agents, and MCP configs.
+4. **MCP Servers** (`mcp_config.json`) and **Hooks** (`hooks.json`).
+
+For detailed instructions on how to structure, format, and create these customizations, use the `agy-customizations` skill.
+&lt;/customizations&gt;
+&lt;skills&gt;
+You can use specialized &#x27;skills&#x27; to help you with complex tasks. Each skill has a name and a description listed below.
+
+Skills are folders of instructions, scripts, and resources that extend your capabilities for specialized tasks. Each skill folder contains:
+- **SKILL.md** (required): The main instruction file with YAML frontmatter (name, description) and detailed markdown instructions
+
+More complex skills may include additional directories and files as needed, for example:
+- **scripts/** - Helper scripts and utilities that extend your capabilities
+- **examples/** - Reference implementations and usage patterns
+- **resources/** - Additional files, templates, or assets the skill may reference
+- **references/** - Contains additional documentation that agents can read when needed
+
+
+If a skill seems relevant to your current task, you MUST read its `SKILL.md` instructions using `view_file` before proceeding. You may skip this step only if you are delegating the skill-related task to a subagent that will read and follow the instructions itself.
+
+When calling `view_file` on these skill paths, always use the exact path provided in the &quot;Available skills&quot; list below.
+
+Available skills:
+- agy-customizations (/Users/cdd/.gemini/antigravity-ide/builtin/skills/agy-customizations/SKILL.md): Comprehensive guide and reference for the Antigravity Customization System. Use to explain how customizations work, their loading priority, discovery mechanisms, and to guide the creation of skills, rules, plugins, hooks, and MCP servers.
+- antigravity-guide (/Users/cdd/.gemini/antigravity-ide/builtin/skills/antigravity_guide/SKILL.md): Provides a comprehensive guide, quick reference, and sitemap for Google Antigravity (AGY), including the Antigravity CLI (agy), Antigravity 2.0, Antigravity IDE, Python SDK, slash commands, keybindings, and customizations (skills, rules, MCP, sidecars). Activate this skill when the user asks questions about how to use, configure, or customize Antigravity, AGY, the agy CLI, the Antigravity IDE, or Antigravity 2.0.
+
+
+&lt;/skills&gt;
+&lt;messaging&gt;
+You are connected to a messaging system where you may receive messages from: background tasks, user-queued messages.
+
+## Receiving Messages
+
+You receive messages automatically at the start of each invocation. All messages are delivered in full directly into your context — no manual retrieval is needed.
+
+## Reactive Wakeup (No Polling Needed)
+
+The system automatically resumes your execution when:
+- A **background task** completes or sends you a notification
+- A **user-queued message** is ready to be dequeued
+
+This means you do **NOT** need to poll in a loop while waiting for messages or updates. After launching anything that performs work asynchronously, you may continue other work or simply stop by calling no more tools. The system will notify you when there is something to process.
+&lt;/messaging&gt;
+&lt;knowledge_items&gt;
+# Knowledge Items (KI) System
+
+### MANDATORY FIRST STEP: Check KI Summaries Before Any Research
+
+**At the start of each conversation, you receive KI summaries with artifact paths.** These summaries represent curated, localized context about this specific repository to help you avoid redundant work and adhere to established patterns.
+
+**BEFORE performing ANY research, analysis, or creating documentation, you MUST:**
+1. **Review the KI summaries** provided at the start of the conversation.
+2. **Identify relevant KIs** by checking if any KI titles/summaries match your task.
+3. **Read relevant KI artifacts** using the artifact paths listed in the summaries BEFORE doing independent research or writing code.
+
+If no KI summary title is relevant to the current task, proceed directly — do not force a match.
+
+### When to Check KIs
+
+You must actively check and utilize KIs in the following scenarios:
+- **&quot;Deceptively Simple&quot; Tasks:** &quot;Add logging,&quot; &quot;run this in the background,&quot; or &quot;add a metadata field&quot; almost always have repository-specific established patterns.
+- **Debugging &amp; Troubleshooting:** Before deep-diving into unexpected behavior, resource leaks, or config issues, check for KIs documenting known bugs, gotchas, or best practices in similar components.
+- **Architecture &amp; Refactoring:** Before designing &quot;new&quot; features, state management or adding to core abstractions, verify if similar patterns (e.g., plugin systems, caching, handler patterns) already exist.
+- **Complex or Multi-Phase Work:** Before planning integrations or uncertain implementations, check for workflow examples or past approaches documented in KIs.
+
+### Critical Rule: KIs are Starting Points, Not Ground Truth
+
+KIs are snapshots of past work. While they provide essential context, they can become stale, especially for API surfaces, dependencies, and config schemas that evolve frequently.
+
+- **Always verify against active code:** If you pull an API usage pattern, a file path, or a dependency from a KI, cross-reference it with the *current* implementation in the workspace before committing to an edit.
+- **Expect gaps &amp; deprecations:** Supplement KI knowledge with your own investigation. Actively check for deprecation warnings or missing context.
+- **Use references:** Use the references in `metadata.json` to trace back to original sources.
+
+### KI Structure
+
+Each KI in `&lt;appDataDir&gt;/knowledge` contains:
+- **`metadata.json`**: Summary, timestamps, and references to original sources.
+- **`artifacts/`**: Related files, documentation, and specific implementation details.
+
+&lt;/knowledge_items&gt;
+&lt;conversation_transcript&gt;
+Conversation transcripts are a complete, chronological record of an agent&#x27;s conversation.
+They are useful for reviewing your own conversation history, your subagents&#x27; conversations, or any other agent&#x27;s conversation.
+Transcripts are stored locally in the filesystem under: &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/.system_generated/logs and are keyed by Conversation ID.
+Conversation IDs uniquely identify an agent&#x27;s conversation; they are used to spawn subagents and are referenced in artifact filepaths.
+
+# File Format
+Transcripts are in JSON Lines (JSONL) format. Each line is a single JSON object representing one &quot;step&quot; or action in the conversation.
+Each JSON object contains fields such as:
+- `step_index`: The index of the step in the trajectory.
+- `source`: The source of the action (e.g., `USER_EXPLICIT`, `MODEL`, `SYSTEM`).
+- `type`: The type of the step. Particular steps of interest are `USER_INPUT`, which represents a user&#x27;s prompt, and `PLANNER_RESPONSE`, which represents the agent&#x27;s response and tool calls.
+- `status`: The status of the step (e.g., `DONE`, `ERROR`).
+- `content`: The text content of the step (e.g., the user&#x27;s request, the model&#x27;s response, or tool responses).
+- `tool_calls`: An array of tool calls made in this step, including their arguments.
+- `is_truncated`: A boolean indicating that the step&#x27;s content or thinking was truncated. Only present in `transcript.jsonl` (never in `transcript_full.jsonl`). When true, read the corresponding line in `transcript_full.jsonl` for the complete content.
+
+# How to use transcripts
+Each conversation produces two types of transcripts:
+- `transcript_full.jsonl`: A complete, untruncated version of the conversation transcript.
+- `transcript.jsonl`: A token-efficient version of `transcript_full.jsonl` with very large text outputs truncated. Each line of this transcript still maps 1-to-1 with a line in `transcript_full.jsonl`.
+
+`transcript.jsonl` is compact enough to view in bulk and should be your starting point.
+`transcript_full.jsonl` can be very large and should only be read line-by-line for specific steps where the truncated version is insufficient.
+
+# When to use transcripts
+Read transcripts when you need to trace the exact sequence of events that are unavailable through other sources. For example:
+- To recall earlier steps in your current conversation that have been truncated from your context window.
+- To understand what another agent did during a task.
+- To investigate context from a past or @mentioned conversation.
+
+# Useful Examples
+The `transcript.jsonl` file is a powerful tool for searching history. Here are some useful ways to interact with it via shell commands:
+
+- **Find all subagents spawned**: Grep for the `invoke_subagent` tool call.
+  ```bash
+  grep &quot;invoke_subagent&quot; &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/.system_generated/logs/transcript.jsonl
+  ```
+- **Find all past user messages**: Grep for steps of type `USER_INPUT`.
+  ```bash
+  grep &#x27;&quot;type&quot;:&quot;USER_INPUT&quot;&#x27; &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/.system_generated/logs/transcript.jsonl
+  ```
+- **View the beginning of the conversation**: Use `head` to see the first few steps.
+  ```bash
+  head -n 10 &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/.system_generated/logs/transcript.jsonl
+  ```
+
+&lt;/conversation_transcript&gt;
+&lt;artifacts&gt;
+Artifacts are special markdown documents that you can create to present structured information to the user.
+All artifacts should be written to the artifact directory: `&lt;appDataDir&gt;/brain/&lt;conversation-id&gt;`. You do NOT need to create this directory yourself, it will be created automatically when you create artifacts.
+
+# Naming Artifacts
+
+Be sure to give artifacts descriptive filenames:
+- `analysis_results.md`
+- `research_notes.md`
+- `experiment_results.md`
+
+# When to Use Artifacts
+
+**Use artifacts for:**
+- Extensive reports and analysis summaries
+- Tables, diagrams, or formatted data
+- Persistent information you&#x27;ll update over time (task lists, experiment logs)
+- Code changes formatted as diffs
+
+**Don&#x27;t use artifacts for:**
+- Simple one-off answers - just respond directly
+- Asking questions or requesting user input - just ask directly
+- Very short content that fits in a paragraph.
+- Scratch scripts or one-off data files - save these in the artifacts `&lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/scratch/` directory.
+
+**After creating or updating an artifact**, DO NOT re-summarize the artifact contents in your response to the user. Instead, point the user to the artifact and highlight only key open questions or decisions that need their input.
+
+Here are some formatting tips for artifacts that you choose to write as markdown files with the .md extension:
+
+# Artifact Formatting Tips
+When creating markdown artifacts, use standard markdown and GitHub Flavored Markdown formatting. The following elements are also available to enhance the user experience:
+
+## Alerts
+Use GitHub-style alerts strategically to emphasize critical information. They will display with distinct colors and icons. Do not place consecutively or nest within other elements:
+  &gt; [!NOTE]
+  &gt; Background context, implementation details, or helpful explanations
+
+  &gt; [!TIP]
+  &gt; Performance optimizations, best practices, or efficiency suggestions
+
+  &gt; [!IMPORTANT]
+  &gt; Essential requirements, critical steps, or must-know information
+
+  &gt; [!WARNING]
+  &gt; Breaking changes, compatibility issues, or potential problems
+
+  &gt; [!CAUTION]
+  &gt; High-risk actions that could cause data loss or security vulnerabilities
+
+## Code and Diffs
+Use fenced code blocks with language specification for syntax highlighting:
+```python
+def example_function():
+  return &quot;Hello, World!&quot;
+```
+
+Use diff blocks to show code changes. Prefix lines with + for additions, - for deletions, and a space for unchanged lines:
+```diff
+-old_function_name()
++new_function_name()
+ unchanged_line()
+```
+
+
+## Mermaid Diagrams
+Create mermaid diagrams using fenced code blocks with language `mermaid` to visualize complex relationships, workflows, and architectures.
+To prevent syntax errors:
+- Quote node labels containing special characters like parentheses or brackets. For example, `id[&quot;Label (Extra Info)&quot;]` instead of `id[Label (Extra Info)]`.
+- Avoid HTML tags in labels.
+
+## Tables
+Use standard markdown table syntax to organize structured data. Tables significantly improve readability and improve scannability of comparative or multi-dimensional information.
+
+## File Links and Media
+- Create clickable file links using standard markdown link syntax: [link text](file:///absolute/path/to/file).
+- Link to specific line ranges using [link text](file:///absolute/path/to/file#L123-L145) format. Link text can be descriptive when helpful, such as for a function [foo](file:///path/to/bar.py#L127-L143) or for a line range [bar.py:L127-143](file:///path/to/bar.py#L127-L143)
+- Embed images and videos with ![caption](/absolute/path/to/file.jpg). Always use absolute paths. The caption should be a short description of the image or video, and it will always be displayed below the image or video.
+- **IMPORTANT**: To embed images and videos, you MUST use the ![caption](absolute path) syntax. Standard links [filename](absolute path) will NOT embed the media and are not an acceptable substitute.
+- **IMPORTANT**: If you are embedding a file in an artifact and the file is NOT already in &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;, you MUST first copy the file to the artifacts directory before embedding it. Only embed files that are located in the artifacts directory.
+
+## Carousels
+Use carousels to display multiple related markdown snippets sequentially. Carousels can contain any markdown elements including images, code blocks, tables, mermaid diagrams, alerts, diff blocks, and more.
+
+Syntax:
+- Use four backticks with `carousel` language identifier
+- Separate slides with `&lt;!-- slide --&gt;` HTML comments
+- Four backticks enable nesting code blocks within slides
+
+Example:
+````carousel
+![Image description](/absolute/path/to/image1.png)
+&lt;!-- slide --&gt;
+![Another image](/absolute/path/to/image2.png)
+&lt;!-- slide --&gt;
+```python
+def example():
+    print(&quot;Code in carousel&quot;)
+```
+````
+
+Use carousels when:
+- Displaying multiple related items like screenshots, code blocks, or diagrams that are easier to understand sequentially
+- Showing before/after comparisons or UI state progressions
+- Presenting alternative approaches or implementation options
+- Condensing related information in walkthroughs to reduce document length
+
+## Critical Rules
+- **Keep lines short**: Keep bullet points concise to avoid wrapped lines
+- **Use basenames for readability**: Use file basenames for the link text instead of the full path
+- **File Links**: Format clickable file links with correct backtick placement:
+    - **Correct**: [utils.py](file:///path/to/utils.py), [`utils.py`](file:///path/to/utils.py), or [foo](file:///path/to/file.py#L123)
+    - **Incorrect**: `[utils.py](file:///path/to/utils.py)`, [utils.py](`file:///path/to/utils.py`), or `[foo](file:///path/to/file.py#L123)`
+
+# Scratch Scripts and Files
+
+You may find it useful to create scratch scripts or files for temporary purposes.
+
+Examples:
+- One-off scripts to debug code
+- Temporary data files for testing
+
+Store these files in the `&lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/scratch/` directory. They will be persisted.
+
+
+Artifact Directory Path: /Users/cdd/.gemini/antigravity-ide/brain/b2dcbe9e-3bc7-429e-9c5f-897946369929
+
+&lt;/artifacts&gt;
+&lt;slash_commands&gt;
+Slash commands are user-facing shortcuts in the chat UI (e.g., typing `/goal` or `/schedule`) that automate complex workflows or trigger specialized agent behaviors.
+
+You cannot execute these commands yourself. Your role is to recommend them to the user when they are a good fit for the task at hand, encouraging the user to explore and trigger them.
+
+To recommend a slash command, suggest it clearly in your response (e.g., &quot;You can use the `/goal` command to...&quot;).
+
+
+Available slash commands you can recommend to the user:
+- /goal: Recommend this when the user wants to run a long-running task (e.g., overnight) and wants the agent to be extra thorough and not stop until the goal is fully achieved.
+- /schedule: Recommend this when the user wants to run an instruction on a recurring schedule or set a one-time timer.
+- /grill-me: Recommend this when the user wants to align on a plan through an interactive interview to resolve design decisions.
+- /learn: Recommend this when the user has corrected the agent or solved a complex setup and wants the agent to persist this behavior for future tasks.
+
+
+&lt;/slash_commands&gt;
+&lt;planning_mode&gt;
+You are in Planning Mode. Exercise judgement on whether a user&#x27;s request warrants a plan before taking action.
+
+**When to Plan**. Stop and create a plan if the user&#x27;s request requires:
+- Major architectural changes
+- Extensive research to fulfill
+- Significant decision making and ambiguity
+- A significant deviation from an existing plan
+- Any complex changes that are not just simple tweaks
+
+If you decide that a request warrants a plan, then follow this workflow:
+
+## Research
+- Thoroughly research the task using research tools.
+- DO NOT make any source code changes or run modifying commands during this phase. Creating or updating artifacts is allowed.
+- Understand the codebase, dependencies, architecture, and implications of the requested changes.
+
+## Create Implementation Plan
+- Create or update the implementation_plan.md artifact with your findings and proposed approach.
+- Include any open questions to clarify ambiguity, underspecified requirements, or design intent directly in the implementation plan. Do not use the ask_question tool to ask these questions.
+- Set request_feedback = true and user_facing = true in the ArtifactMetadata.
+- The user will automatically see any new and modified plans you create, so DO NOT re-summarize the plan in your request.
+
+## Obtain User Approval
+- STOP and wait for the user&#x27;s explicit approval before proceeding to execution.
+
+## Execute
+- Once the user approves, execute the implementation plan
+- If you discover issues that require significant changes, update the implementation_plan.md and request review again before continuing
+
+## Verify
+- Verify that your changes have the desired effects e.g. run unit tests, make sure code builds, etc.
+- Create or update the walkthrough.md artifact to summarize your changes.
+
+**When NOT to plan**. Do not create a plan or block if the user&#x27;s request:
+- Is investigatory in nature, for example: &#x27;explain how X works&#x27;, &#x27;where do we do Y?&#x27;, &#x27;why did Z happen?&#x27;
+- Is trivially simple and one-off in nature. For example: &#x27;format this output as a table&#x27;, &#x27;fix the alignment of this UI layout&#x27;, &#x27;add a comment to this code&#x27;, &#x27;run this command&#x27;, &#x27;fix this syntax error&#x27;
+- Is a minor follow-up to an existing plan that the user has already approved. For example: &#x27;plot the results&#x27;, &#x27;add a unit test for this&#x27;, &#x27;use an enum&#x27;.
+
+If you decide that a request does NOT warrant a plan, then continue your work WITHOUT making a plan or requesting user review.
+
+&lt;/planning_mode&gt;
+&lt;planning_mode_artifacts&gt;
+When in planning mode, you should create two special artifacts
+
+# Implementation Plan
+Path: &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/implementation_plan.md
+
+**Purpose**: A detailed design document to present your technical implementation plan to the user for feedback and approval.
+After reading the document, the user should understand the key technical details of your plan, and be able to make an informed decision on whether to approve it.
+
+**Format**: Use the following format, omitting any irrelevant sections.
+```markdown
+# [Goal Description]
+
+Provide a brief description of the problem, any background context, and what the change accomplishes.
+
+## User Review Required
+
+Document anything that requires user review or feedback, for example, breaking changes or significant design decisions. Use GitHub alerts (IMPORTANT/WARNING/CAUTION) to highlight critical items.
+
+## Open Questions
+
+Any clarifying or design questions for the user that will impact the implementation plan. Use GitHub alerts (IMPORTANT/WARNING/CAUTION) to highlight critical items.
+
+## Proposed Changes
+
+Group files by component (e.g., package, feature area, dependency layer) and order logically (dependencies first). Separate components with horizontal rules for visual clarity.
+
+### [Component Name]
+
+Summary of what will change in this component, separated by files. For specific files, Use [NEW] and [DELETE] to demarcate new and deleted files, for example:
+
+#### [MODIFY] [file basename](file:///absolute/path/to/modifiedfile)
+#### [NEW] [file basename](file:///absolute/path/to/newfile)
+#### [DELETE] [file basename](file:///absolute/path/to/deletedfile)
+
+## Verification Plan
+
+Summary of how you will verify that your changes have the desired effects.
+
+### Automated Tests
+- The commands of any automated tests you&#x27;ll run.
+
+### Manual Verification
+- Asking the user to deploy to staging and testing, verifying UI changes on an iOS app etc.
+```
+
+# Walkthrough
+Path: &lt;appDataDir&gt;/brain/&lt;conversation-id&gt;/walkthrough.md
+
+**Purpose**: After completing work, summarize what you accomplished. Update an existing walkthrough for related follow-up work rather than creating a new one.
+
+**Document**:
+- Changes made
+- What was tested
+- Validation results
+
+Embed screenshots and recordings to visually demonstrate UI changes and user flows.
+
+&lt;/planning_mode_artifacts&gt;
+&lt;guidelines&gt;
+Follow these behavioral guidelines at all times:- Maintain documentation integrity. Preserve all existing comments and docstrings that are unrelated to your code changes, unless the user specifies otherwise.
+
+&lt;/guidelines&gt;
+&lt;communication_style&gt;
+- Keep your responses concise.
+- Format your responses in github-style markdown.
+- If you&#x27;re unsure about the user&#x27;s intent, ask for clarification rather than making assumptions.
+- You MUST create clickable links for all files and code symbols (classes, types, functions, structs). Use github style markdown links with the `file://` scheme (e.g., [filename](file:///path/to/file) or [ClassName](file:///path/to/file#L10-L20)`). For Windows, use forward slashes for paths.
+&lt;/communication_style&gt;</pre></details></div>
+    </article>
+
+    <article class="msg user" id="s17192-m1">
+      <header>
+        <span class="role">User</span>
+        <span class="idx">#1</span>
+        <span class="chars">438 chars</span>
+        
+      </header>
+      <div class="body"><div class="md">what&#x27;s your model</div><details class="meta"><summary>metadata / context (389 chars)</summary><pre class="raw">&lt;ADDITIONAL_METADATA&gt;
+The current local time is: 2026-08-14T22:25:25+08:00.
+&lt;/ADDITIONAL_METADATA&gt;
+&lt;USER_SETTINGS_CHANGE&gt;
+The user changed setting `Model Selection` from None to Gemini 3.7 Flash (High). No need to comment on this change if the user doesn&#x27;t ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+&lt;/USER_SETTINGS_CHANGE&gt;</pre></details></div>
+    </article>
+
+    <article class="msg user" id="s17192-m2">
+      <header>
+        <span class="role">User</span>
+        <span class="idx">#2</span>
+        <span class="chars">410 chars</span>
+        
+      </header>
+      <div class="body"><div class="md"># Conversation History<br>
+Here are the conversation IDs, titles, and summaries of your most recent 1 conversations, in reverse chronological order:<br>
+<br>
+&lt;conversation_summaries&gt;<br>
+## Conversation 6d2b9d3b-5a9c-44be-adb8-6471b8bf5438: Initial Greeting And Introduction<br>
+- Created: 2026-08-14T14:23:11Z<br>
+- Last modified: 2026-08-14T14:24:57Z<br>
+<br>
+### USER Objective:<br>
+Initial Greeting And Introduction<br>
+<br>
+&lt;/conversation_summaries&gt;</div></div>
+    </article>
+
+    <article class="msg assistant" id="s17192-m3">
+      <header>
+        <span class="role">Assistant</span>
+        <span class="idx">#3</span>
+        <span class="chars">67 chars</span>
+        <span class="meta-tag">finish=STOP</span>
+      </header>
+      <div class="body"><div class="md">I am <strong>Gemini 3.7 Flash</strong>,<br>
+ a large language model built by Google.</div></div>
+    </article></section>
+</main>
+<footer>
+  Generated from Surge MITM dumps. System prompts collapsed by default. Tool payloads expandable.
+</footer>
+<script>
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+});
+</script>
+</body>
+</html>

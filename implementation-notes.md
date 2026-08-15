@@ -145,7 +145,7 @@ schema 声明 `BOOLEAN`，IDE 抓包实发 `"False"`（字符串）。跟 IDE，
 - 请求 model `gemini-3.6-flash-high` ↔ 响应 `modelVersion: gemini-3.6-flash`，二者不同；`/v1/models` 用请求名
 - `WaitMsBeforeAsync` schema 明确上限 10000
 - 伴生 RPC 比例 13 stream : 13 metrics : 4 listExperiments ≈ 1 : 1 : 0.3（P1 补，代价低）
-- `fetchAvailableModels` 探测超时，未确认存在性 → `/v1/models` P0 保持静态
+- 2026-08-14 新抓包确认 `fetchAvailableModels` 存在且可用：`POST /v1internal:fetchAvailableModels`，body 为 `{project}`，响应为 gzip JSON；`/v1/models` 改为每次通过当前 token/project 动态调用。详见 `docs/fetch-available-models.md`。
 
 ### 仍开放（收敛后）
 
@@ -441,13 +441,13 @@ byte-identical to leakcheck.prototype.mjs output = true
 
 ## server.ts（2026-08-10）
 
-`src/server.ts`：Express 单文件串起 `/health` `/v1/models` `/v1/messages` 多轮闭环。**未改** `src/` 其它文件。
+`src/server.ts`：Express 单文件串起 `/health` `/v1/models` `/v1/messages` 多轮闭环。该段记录的是 2026-08-10 版本；2026-08-14 起 `/v1/models` 复用 `src/antigravity-client.ts` 的动态模型 RPC。
 
 ### 路由
 | 方法 | 路径 | 鉴权 | 行为 |
 |------|------|------|------|
 | GET | `/health` | 无 | `{ok, tokens, pending}`，无 token 明文 |
-| GET | `/v1/models` | API_KEY | 静态列表，`id=config.antigravity.defaultModel` |
+| GET | `/v1/models` | API_KEY | 通过当前 token/project 调用 `fetchAvailableModels`，将上游 `models` 映射为动态列表 |
 | POST | `/v1/messages` | API_KEY | 分支 A 首轮 / 分支 B tool_result 续轮 |
 
 ### 边界处理
@@ -938,4 +938,108 @@ logcat 自检：同夹具 → 分支 B。
 - `README.md` 重命名为 `README_zh.md`，保留现有中文内容（含用户此前加入的调试启动示例）。
 - 英文版按用户指定使用文件名 `READ.md`，而不是常见的 `README_en.md`。
 - `package.json` 的发布文件列表同时包含 `README_zh.md` 与 `READ.md`，避免 npm 包遗漏任一语言版本。
+
+## 动态模型列表（2026-08-14）
+
+### 决策
+
+- **上游来源**：`GET /v1/models` 每次通过 `withAuth` 使用当前 token 和 project 调用 `POST /v1internal:fetchAvailableModels`；不缓存某次账号的模型目录。
+- **传输**：复用 `postStream(..., chunked=false)`，请求使用 `Content-Length`；复用 `decodeBody` 处理抓包中的 gzip JSON 响应。
+- **映射**：上游 `models` object 的键成为 `data[].id`；`displayName` 成为 `display_name`；其余模型元数据保留在 data 项中。
+- **不伪造字段**：删除原先固定的 `created_at`，因为上游响应没有该字段。
+- **默认模型边界**：`DEFAULT_MODEL` 仍只用于 `/v1/messages` 未指定模型时，不参与 `/v1/models` 列表。
+
+### 取舍
+
+- 本次只实现实际上游模型目录查询，不把 014741 的 28 个模型 id 写入运行时代码；抓包目录作为事实夹具和协议文档保存于 `docs/fetch-available-models.*`。
+- `models` 的各模型元数据字段按需出现，因此使用开放的 `AvailableModelInfo` 类型，而不是把某一次账号响应收窄成固定 schema。
+
+### 验证
+
+- `npm test`：14/14 通过，包括 gzip 响应解压、`{project}` 请求体、非 chunked 请求和动态 id 映射。
+
+## 404 Requested entity was not found（2026-08-14 22:21 vs 22:24）
+
+对比 Surge：
+
+- 本项目失败：`2026-08-14-222136` / `#17104` → `HTTP/1.1 404`，body `{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}`，`x-cloudaicompanion-trace-id: 6401409423e4040e`，`Server-Timing: gfet4t7; dur=7291`
+- IDE 成功：`2026-08-14-222445` / `#17192` → `HTTP/1.1 200` SSE，`gemini-3.7-flash`
+
+两边同 host、同 RPC、同 project、同 model：
+
+| 项 | 本项目 #17104 | IDE #17192 |
+|---|---|---|
+| URL | `POST /v1internal:streamGenerateContent?alt=sse` | 同 |
+| project | `fluent-falcon-nrl9f` | 同 |
+| model | `gemini-3.7-flash-high` | 同 |
+| requestType / body.userAgent | `agent` / `antigravity` | 同 |
+| generationConfig / toolConfig | 65536 / VALIDATED | 同 |
+| HTTP UA | `antigravity/ide/2.1.1 darwin/arm64` | `antigravity/ide/2.5.5 (aidev_client; os_type=darwin; arch=arm64)` |
+| process | `/opt/homebrew/Cellar/node/26.5.0/bin/node` | `language_server_macos_arm` |
+| token | `ya29.a0ARGnu0ZyXS…RgSARUS…` | `ya29.a0ARGnu0aBEi…WYSARUS…` |
+| labels | 3 键，无 `model_enum` | 6 键，含 `model_enum=MODEL_PLACEHOLDER_M298` |
+| sessionId | 随机 `-8549718715743071359` | 跨会话稳定 `-3750763034362895579` |
+
+### 因果判断
+
+404 不是路由/host/model id 写错。证据：
+
+1. 同 URL、同 `project`、同 `model`；IDE 3 分钟后 200。
+2. 服务端算了 7.3s 才回 404（`gfet4t7; dur=7291`），是实体查找失败，不是 404 路由。
+3. 本机 `product.json` 已是 `ideVersion: 2.5.5`（2026-08-13）。language_server 字符串是 `os_type=%s` + `aidev_client` + `%s/%s (%s)`，对应新 UA，不再是 `2.1.1 darwin/arm64`。
+4. 两边 Bearer 不是同一张票：OAuth 后缀 `RgSARUS` vs `WYSARUS`。本项目 token 来自独立 refresh（`~/.antigravityide2api/token.json`，21:23 写过），IDE 用自己的 LS token。
+5. `labels.model_enum` / 随机 `sessionId` / system 长短 **不是** 这次 404 的充分条件：`implementation-notes` 已记录最小 labels 曾 200；IDE 的 `sessionId` 从 08-08 到 08-14 一直是 `-3750763034362895579`，像本机稳定值，不是「找不到就 404」的必填服务端实体。
+
+最可能的实体：`cloudaicompanionProject` 对**这张 token** 不可见。旧 UA `2.1.1` 叠在 2.5.5 账号上，可能让 PA 把请求分到旧 client 通道，再去查 project 失败。
+
+### 下一步（未改代码）
+
+1. UA 默认改成 `antigravity/ide/${product.ideVersion} (aidev_client; os_type=${os}; arch=${arch})`，默认 `2.5.5`。
+2. 复用 IDE 当前 access token，不要用独立 refresh 出来的另一张票做对照。
+3. 用同一 token 打 `loadCodeAssist`，确认返回的 project 仍是 `fluent-falcon-nrl9f`。
+
+### 实证（2026-08-14 22:46）
+
+隔离探针：原样回放 `#17104` body（`gemini-3.7-flash-high` / `fluent-falcon-nrl9f` / 随机 sessionId / 3 键 labels），只换 token 和 HTTP UA。不写 `token.json`。
+
+Token 指纹：
+
+- 文件票 `~/.antigravityide2api/token.json`：`RgSARUS`，`expiresAt=14:22:30Z`，探针时已过期。
+- IDE `state.vscdb` 现票：`WYSARUS`，与 22:24 IDE 成功请求同一张。
+- `refreshToken` **相同**；文件票 refresh 后得到第三张 access，仍不是 IDE 现票。
+
+`loadCodeAssist`：过期票 401；IDE 现票 / 文件 refresh 票 + 任意 UA 都 200，project 恒为 `fluent-falcon-nrl9f`，`currentTier=free-tier`。project 对这张账号可见，404 不是 project 丢了。
+
+`streamGenerateContent` 2×2（同一失败 body）：
+
+| token \ UA | `ide/2.1.1 darwin/arm64` | `ide/2.5.5 (aidev_client; …)` |
+|---|---|---|
+| 文件过期票 | 401 | 401 |
+| IDE 现票 | **404 NOT_FOUND** | **200** `gemini-3.7-flash` |
+| 文件 refresh 票 | **404 NOT_FOUND** | **200** `gemini-3.7-flash` |
+
+再拆 UA 版本 vs 格式（IDE 现票）：
+
+| UA | generate |
+|---|---|
+| `antigravity/ide/2.5.5 darwin/arm64` | **200** |
+| `antigravity/ide/2.1.1 (aidev_client; os_type=darwin; arch=arm64)` | **404** |
+| `antigravity/ide/2.5.5 (aidev_client; os_type=darwin; arch=arm64)` | **200** |
+
+**结论：404 的实体是 `gemini-3.7-flash-high` 对 client version `2.1.1` 不可见。** 与独立 refresh 票、`aidev_client` 格式、labels、sessionId 无关。`config.ts` 默认 `IDE_VERSION=2.1.1` 即充分条件。
+
+修复方向：默认 UA 版本跟本机 `product.json` 的 `ideVersion`（现 2.5.5）；格式可继续旧式 `darwin/arm64`，新式只是 IDE 现状不是 200 的必要条件。
+
+## ideVersion 运行时提取（2026-08-14）
+
+### 决策
+
+- `extract-token.ts` 增加 `extractIdeVersion()`：从本机 `product.json` 读 `ideVersion`，路径与 `extractOAuthClient` 共用 `ideInstallRoots()`。
+- `config.ts` 每次进程启动解析一次：`IDE_VERSION` env > `extractIdeVersion()` > 回退 `2.1.1`（无 IDE 的单测/CI）。
+- HTTP UA 仍用旧格式 `antigravity/ide/${ver} ${platform}/${arch}`；版本跟安装走。404 实证只卡版本，不卡 `aidev_client` 格式。
+- 不写入 `token.json`：版本跟安装走，跟凭证生命周期无关；下次启动自动跟上 IDE 升级。
+
+### 偏离
+
+- 无 IDE 时回退 `2.1.1` 而不是抛错，避免 T9/CI 在无安装环境崩。有 IDE 时必须读到真值。
 

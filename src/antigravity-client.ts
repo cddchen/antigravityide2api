@@ -10,6 +10,7 @@ import { URL } from 'url';
 import config from './config';
 import type {
   AgentEnvelope,
+  AvailableModelsResponse,
   NativeContent,
   NativePart,
   SseFrame,
@@ -238,7 +239,7 @@ export function accumulateFrame(
  *
  *   POST /v1internal:streamGenerateContent?alt=sse HTTP/1.1
  *   Host: daily-cloudcode-pa.googleapis.com
- *   User-Agent: antigravity/ide/2.1.1 darwin/arm64
+ *   User-Agent: antigravity/ide/{product.json ideVersion} darwin/arm64
  *   Transfer-Encoding: chunked      ← 流式端点；非流式（recordCodeAssistMetrics）用 Content-Length
  *   Authorization: Bearer ya29.…
  *   Content-Type: application/json
@@ -320,6 +321,87 @@ export function decodeBody(res: http.IncomingMessage): NodeJS.ReadableStream {
     return res.pipe(require('zlib').createGunzip() as NodeJS.ReadWriteStream);
   }
   return res;
+}
+
+export interface FetchAvailableModelsOpts {
+  accessToken: string;
+  projectId: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST fetchAvailableModels，获取当前 project/账号实际可见的模型目录。
+ * 抓包请求使用 Content-Length（不是请求 chunked）；响应是 gzip 压缩 JSON，不是 SSE。
+ */
+export async function fetchAvailableModels(
+  opts: FetchAvailableModelsOpts,
+): Promise<AvailableModelsResponse> {
+  const url = `${config.antigravity.baseUrl}/v1internal:fetchAvailableModels`;
+  const payload = JSON.stringify({ project: opts.projectId });
+  const signals: AbortSignal[] = [AbortSignal.timeout(config.antigravity.requestTimeout)];
+  if (opts.signal) signals.push(opts.signal);
+  const signal = AbortSignal.any(signals);
+
+  let res: http.IncomingMessage;
+  try {
+    res = await postStream(url, opts.accessToken, payload, signal, false);
+  } catch (e) {
+    if (e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+      throw new AntigravityError(`request aborted/timeout: ${e.message}`, 408);
+    }
+    throw e;
+  }
+
+  const status = res.statusCode ?? 0;
+  const stream = decodeBody(res);
+  const body = await new Promise<string>((resolve) => {
+    let text = '';
+    stream.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+    stream.on('end', () => resolve(text));
+    stream.on('error', () => resolve(text));
+  });
+
+  if (status < 200 || status >= 300) {
+    let message = `HTTP ${status}`;
+    try {
+      const json = JSON.parse(body) as { error?: { message?: string; status?: string } };
+      if (json.error?.message) message = json.error.message;
+    } catch {
+      if (body) message = body.slice(0, 500);
+    }
+    throw new AntigravityError(message, status, undefined, body);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch (e) {
+    throw new AntigravityError(
+      `fetchAvailableModels 响应非 JSON (HTTP ${status}): ${e instanceof Error ? e.message : String(e)}`,
+      502,
+      undefined,
+      body.slice(0, 500),
+    );
+  }
+
+  if (
+    !json ||
+    typeof json !== 'object' ||
+    Array.isArray(json) ||
+    !('models' in json) ||
+    !json.models ||
+    typeof json.models !== 'object' ||
+    Array.isArray(json.models)
+  ) {
+    throw new AntigravityError(
+      'fetchAvailableModels 响应缺少对象类型的 models 字段',
+      502,
+      undefined,
+      body.slice(0, 500),
+    );
+  }
+
+  return json as AvailableModelsResponse;
 }
 
 // ---------- 流式生成 ----------

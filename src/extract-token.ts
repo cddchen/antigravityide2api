@@ -25,26 +25,34 @@ function idePaths(): { db: string; storage: string } {
 }
 
 /**
+ * IDE 安装根（resources/app）。main.js / product.json 都在这下面。
+ */
+function ideInstallRoots(): string[] {
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    return [
+      '/Applications/Antigravity IDE.app/Contents/Resources/app',
+      path.join(home, 'Applications/Antigravity IDE.app/Contents/Resources/app'),
+    ];
+  }
+  if (process.platform === 'win32') {
+    const la = process.env.LOCALAPPDATA || '';
+    return [path.join(la, 'Programs', 'Antigravity IDE', 'resources', 'app')];
+  }
+  return ['/usr/share/antigravity-ide/resources/app', '/opt/Antigravity IDE/resources/app'];
+}
+
+/**
  * IDE 主包路径（OAuth client 常量所在）。
  * 实证 darwin：main.js 里 `B1e="…apps.googleusercontent.com",k1e="GOCSPX-…"` 相邻；
  * 两个 language_server 二进制里只有 secret、没有配对的 id，扫不出来。
  */
 function ideMainJsPaths(): string[] {
-  const home = os.homedir();
-  if (process.platform === 'darwin') {
-    return [
-      '/Applications/Antigravity IDE.app/Contents/Resources/app/out/main.js',
-      path.join(home, 'Applications/Antigravity IDE.app/Contents/Resources/app/out/main.js'),
-    ];
-  }
-  if (process.platform === 'win32') {
-    const la = process.env.LOCALAPPDATA || '';
-    return [path.join(la, 'Programs', 'Antigravity IDE', 'resources', 'app', 'out', 'main.js')];
-  }
-  return [
-    '/usr/share/antigravity-ide/resources/app/out/main.js',
-    '/opt/Antigravity IDE/resources/app/out/main.js',
-  ];
+  return ideInstallRoots().map((root) => path.join(root, 'out', 'main.js'));
+}
+
+function ideProductJsonPaths(): string[] {
+  return ideInstallRoots().map((root) => path.join(root, 'product.json'));
 }
 
 let clientCache: { id: string; secret: string } | undefined;
@@ -72,6 +80,37 @@ export function extractOAuthClient(): { id: string; secret: string } {
   throw new Error(
     `未能从本机 Antigravity IDE 提取 OAuth client（已试: ${tried.join(', ')}）。\n` +
       '请安装 Antigravity IDE，或设置 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 覆盖。',
+  );
+}
+
+let ideVersionCache: string | undefined;
+
+/**
+ * 从本机 IDE `product.json` 读 ideVersion（本机现值为 2.5.5）。
+ * 不要用旁边的 `version`（那是 VS Code 内核，如 1.107.0）。
+ * 进程内缓存一次；env `IDE_VERSION` 由 config 覆盖，这里不读 env。
+ */
+export function extractIdeVersion(): string {
+  if (ideVersionCache) return ideVersionCache;
+  const tried: string[] = [];
+  for (const p of ideProductJsonPaths()) {
+    tried.push(p);
+    if (!fs.existsSync(p)) continue;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch (e) {
+      throw new Error(`解析 IDE product.json 失败: ${p}: ${(e as Error).message}`);
+    }
+    const v = raw && typeof raw === 'object' ? (raw as { ideVersion?: unknown }).ideVersion : undefined;
+    if (typeof v === 'string' && v.trim()) {
+      ideVersionCache = v.trim();
+      return ideVersionCache;
+    }
+  }
+  throw new Error(
+    `未能从本机 Antigravity IDE 读取 ideVersion（已试: ${tried.join(', ')}）。\n` +
+      '请安装 Antigravity IDE，或设置 IDE_VERSION 覆盖。',
   );
 }
 
@@ -220,6 +259,12 @@ export function extractAndSaveToken(
 ): { tokenPath: string; entry: TokenEntry } {
   const entry = extractLocalToken('account-1');
   const savedPath = writeTokenFile(entry, tokenPath);
+  let ideVersion = '<none>';
+  try {
+    ideVersion = extractIdeVersion();
+  } catch {
+    // 无安装时仍写出 token；运行期 config 会回退
+  }
   console.log(
     JSON.stringify(
       {
@@ -227,6 +272,7 @@ export function extractAndSaveToken(
         accessToken: maskToken(entry.accessToken),
         refreshToken: maskToken(entry.refreshToken),
         machineId: entry.machineId || '<none>',
+        ideVersion,
       },
       null,
       2,

@@ -42,7 +42,7 @@ export ANTHROPIC_AUTH_TOKEN=<API_KEY 或任意非空，若服务未设 API_KEY>
 | `REQUEST_TIMEOUT` | `300000` | 上游请求超时 ms |
 | `PENDING_TIMEOUT` | `600000` | pending session 超时 ms |
 | `ANTIGRAVITY_BASE` | `https://daily-cloudcode-pa.googleapis.com` | 上游 base |
-| `IDE_VERSION` | `2.1.1` | UA / metadata 版本 |
+| `IDE_VERSION` | 本机 `product.json` 的 `ideVersion` | UA / `loadCodeAssist` metadata 版本；env 可覆盖 |
 | `ANTIGRAVITY_SYSTEM` | `trimmed` | system prompt：`full` / `trimmed` / `short` |
 
 ## 免责声明

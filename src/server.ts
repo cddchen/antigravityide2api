@@ -18,6 +18,7 @@ type AnthropicUsage,
 } from './anthropic';
 import {
 AntigravityError,
+fetchAvailableModels,
 newSessionId,
 streamGenerate,
 } from './antigravity-client';
@@ -448,18 +449,28 @@ tokens = 0;
 res.json({ ok: true, tokens, pending: pendingCount() });
 });
 
-app.get('/v1/models', checkApiKey, (_req, res) => {
-const id = config.antigravity.defaultModel;
-res.json({
-data: [
-{
- id,
- type: 'model',
- display_name: id,
- created_at: '2026-01-01T00:00:00Z',
-},
-],
-});
+function toModelList(
+  catalog: Awaited<ReturnType<typeof fetchAvailableModels>>,
+): Array<Record<string, unknown>> {
+  return Object.entries(catalog.models).map(([id, metadata]) => ({
+    ...metadata,
+    id,
+    type: 'model',
+    display_name:
+      typeof metadata.displayName === 'string' ? metadata.displayName : id,
+  }));
+}
+
+app.get('/v1/models', checkApiKey, async (_req, res) => {
+try {
+const entry = firstTokenEntry();
+const catalog = await withAuth(entry, (accessToken, projectId) =>
+  fetchAvailableModels({ accessToken, projectId }),
+);
+res.json({ data: toModelList(catalog) });
+} catch (err) {
+sendErr(res, null, err);
+}
 });
 
 app.post('/v1/messages', checkApiKey, async (req, res) => {
@@ -677,7 +688,9 @@ const { host, port } = config.server;
 return new Promise((resolve, reject) => {
 const server = app.listen(port, host, () => {
     console.log(`[boot] listening http://${host}:${port}`);
-    console.log(`[boot] model=${config.antigravity.defaultModel} systemMode=${config.systemMode}`);
+    console.log(
+      `[boot] model=${config.antigravity.defaultModel} systemMode=${config.systemMode} ideVersion=${config.antigravity.ideVersion} ua=${config.antigravity.userAgent}`,
+    );
     if (debugEnabled()) {
       console.log(`[boot] DEBUG=1 logcat http://${host}:${port}/logcat`);
     }
