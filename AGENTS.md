@@ -50,6 +50,7 @@
 
 - 保持 `systemInstruction.role: "user"`、`requestType: "agent"`、`toolConfig` mode `VALIDATED`、原生 FC/FR history role `model`，以及只含 `{ output: string }` 的 `functionResponse.response`；只有新 capture 能证明需要改变。
 - 上游 SSE usage 是累计值，不是 delta。Function-call part 必须整体保留；末尾空 text/signature frame 必须忽略；thought text 不得作为普通响应文本暴露。
+- 上游 HTTP/SSE 响应必须跨 chunk 做 UTF-8 解码（`SseLineReader` / `readStreamUtf8`）。禁止对单个 Buffer `toString('utf8')` 后再拼接，否则 3 字节汉字/制表符会在 chunk 边界变成 U+FFFD。
 - Claude 文本历史可以回放；没有原始签名的历史 Claude `tool_use`/`tool_result` 不得翻译进上游历史。
 - 原生到 Claude 的映射必须是语义映射，不得透传。增加剩余 8 个原生工具之一时，必须同时定义参数映射、结果整形、拒绝行为和夹具测试。
 - 所有插入合成 shell 文本的模型输入都必须使用现有 `sq` helper 引用。`run_command.CommandLine` 本身是有意执行的内容；不得在周围拼接其他未引用字段。

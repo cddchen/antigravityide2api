@@ -6,6 +6,7 @@
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
+import { StringDecoder } from 'string_decoder';
 import { URL } from 'url';
 import config from './config';
 import type {
@@ -118,6 +119,47 @@ export function isSseDoneLine(line: string): boolean {
   const raw = line.endsWith('\r') ? line.slice(0, -1) : line;
   if (!raw.startsWith('data:')) return false;
   return raw.slice(5).trimStart() === '[DONE]';
+}
+
+/**
+ * 跨 TCP/gunzip chunk 解码 UTF-8，再按 `\n` 切 SSE 行。
+ * 禁止对每个 Buffer 单独 `toString('utf8')`：3 字节汉字/制表符（质=\xe8\xb4\xa8、─=\xe2\x94\x80）
+ * 若被切在第 1/2 字节，Node 会按 replacement 策略插入 U+FFFD，JSON.parse 仍成功但正文乱码。
+ */
+export class SseLineReader {
+  private readonly decoder = new StringDecoder('utf8');
+  private buffer = '';
+
+  push(chunk: Buffer): string[] {
+    this.buffer += this.decoder.write(chunk);
+    const lines: string[] = [];
+    let nl: number;
+    while ((nl = this.buffer.indexOf('\n')) !== -1) {
+      lines.push(this.buffer.slice(0, nl));
+      this.buffer = this.buffer.slice(nl + 1);
+    }
+    return lines;
+  }
+
+  /** 刷新 decoder 内部残留，返回最后一行（可能没有尾随 `\n`） */
+  end(): string {
+    this.buffer += this.decoder.end();
+    const rest = this.buffer;
+    this.buffer = '';
+    return rest;
+  }
+}
+
+/** 完整响应体：先拼 Buffer 再解码，避免 chunk 边界切断多字节字符 */
+export function readStreamUtf8(stream: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = [];
+  return new Promise((resolve) => {
+    stream.on('data', (c: Buffer | string) => {
+      chunks.push(typeof c === 'string' ? Buffer.from(c, 'utf8') : c);
+    });
+    stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    stream.on('error', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
 }
 
 /** 流式归并累加器 */
@@ -354,12 +396,7 @@ export async function fetchAvailableModels(
 
   const status = res.statusCode ?? 0;
   const stream = decodeBody(res);
-  const body = await new Promise<string>((resolve) => {
-    let text = '';
-    stream.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
-    stream.on('end', () => resolve(text));
-    stream.on('error', () => resolve(text));
-  });
+  const body = await readStreamUtf8(stream);
 
   if (status < 200 || status >= 300) {
     let message = `HTTP ${status}`;
@@ -440,12 +477,7 @@ export async function streamGenerate(opts: StreamGenerateOpts): Promise<StreamTu
   const stream = decodeBody(res);
 
   if (status < 200 || status >= 300) {
-    const body = await new Promise<string>((resolve) => {
-      let s = '';
-      stream.on('data', (c: Buffer) => (s += c.toString('utf8')));
-      stream.on('end', () => resolve(s));
-      stream.on('error', () => resolve(s));
-    });
+    const body = await readStreamUtf8(stream);
     let msg = `HTTP ${status}`;
     if (body) {
       try {
@@ -465,8 +497,8 @@ export async function streamGenerate(opts: StreamGenerateOpts): Promise<StreamTu
   const acc = createStreamAcc();
   const cbs: AccumulateCbs = { onText: opts.onText, onThought: opts.onThought };
 
-  // 按行缓冲：chunk 边界会切断 SSE 行（解析逻辑与改传输层前完全一致）
-  let buffer = '';
+  // 按行缓冲：chunk 边界会切断 SSE 行，也会切断 UTF-8 多字节字符
+  const reader = new SseLineReader();
   let earlyDone = false;
 
   await new Promise<void>((resolve, reject) => {
@@ -476,45 +508,43 @@ export async function streamGenerate(opts: StreamGenerateOpts): Promise<StreamTu
       resolve();
     };
 
+    const handleLine = (line: string): boolean => {
+      if (isSseDoneLine(line)) {
+        finish();
+        return true;
+      }
+
+      let frame: SseFrame | null;
+      try {
+        frame = parseSseLine(line);
+      } catch (e) {
+        reject(
+          new AntigravityError(
+            `SSE JSON parse failed: ${e instanceof Error ? e.message : String(e)}`,
+            502,
+            undefined,
+            line.slice(0, 300),
+          ),
+        );
+        return true;
+      }
+      if (frame) accumulateFrame(acc, frame, cbs);
+      return false;
+    };
+
     stream.on('data', (chunk: Buffer) => {
       if (earlyDone) return;
-      buffer += chunk.toString('utf8');
-
-      let nl: number;
-      while ((nl = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-
-        if (isSseDoneLine(line)) {
-          finish();
-          return;
-        }
-
-        let frame: SseFrame | null;
-        try {
-          frame = parseSseLine(line);
-        } catch (e) {
-          reject(
-            new AntigravityError(
-              `SSE JSON parse failed: ${e instanceof Error ? e.message : String(e)}`,
-              502,
-              undefined,
-              line.slice(0, 300),
-            ),
-          );
-          return;
-        }
-        if (!frame) continue;
-        accumulateFrame(acc, frame, cbs);
+      for (const line of reader.push(chunk)) {
+        if (handleLine(line)) return;
       }
     });
 
     stream.on('end', () => {
       if (earlyDone) return;
-      // 尾部残余行
-      if (buffer.trim() && !isSseDoneLine(buffer)) {
+      const rest = reader.end();
+      if (rest.trim() && !isSseDoneLine(rest)) {
         try {
-          const frame = parseSseLine(buffer);
+          const frame = parseSseLine(rest);
           if (frame) accumulateFrame(acc, frame, cbs);
         } catch {
           // 半截残渣忽略
@@ -731,6 +761,70 @@ if (require.main === module) {
     );
   }
   assert(threw, 'frame.error must throw');
+
+  // 7. UTF-8 跨 chunk：3 字节汉字/制表符切在中间不得变成 U+FFFD
+  {
+    const feed = (bytes: Buffer, size: number): string[] => {
+      const r = new SseLineReader();
+      const out: string[] = [];
+      for (let i = 0; i < bytes.length; i += size) {
+        out.push(...r.push(bytes.subarray(i, i + size)));
+      }
+      const rest = r.end();
+      if (rest) out.push(rest);
+      return out;
+    };
+
+    const text = '质结拟功付─┬';
+    const sse = Buffer.from(
+      `data: {"response":{"candidates":[{"content":{"parts":[{"text":${JSON.stringify(text)}}]}}]}}\n`,
+      'utf8',
+    );
+    const idx = sse.indexOf(Buffer.from('质'));
+    assert(idx >= 0, '质 must be in sse bytes');
+    const r = new SseLineReader();
+    const first = r.push(sse.subarray(0, idx + 2));
+    assert(first.length === 0, 'incomplete UTF-8 must not emit a line');
+    const second = r.push(sse.subarray(idx + 2));
+    assert(second.length === 1, `expected 1 line, got ${second.length}`);
+    const frame = parseSseLine(second[0]);
+    assert(
+      frame?.response?.candidates?.[0]?.content?.parts?.[0]?.text === text,
+      `split-质 text: ${JSON.stringify(frame?.response?.candidates?.[0]?.content?.parts?.[0]?.text)}`,
+    );
+
+    const contents = `${'质'.repeat(4000)}结拟功付${'─'.repeat(80)}┬`;
+    const fcLine = Buffer.from(
+      `data: ${JSON.stringify({
+        response: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: 'w1',
+                      name: 'write_to_file',
+                      args: { Contents: contents },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      })}\n`,
+      'utf8',
+    );
+    for (const size of [1, 2, 7, 4096]) {
+      const lines = feed(fcLine, size);
+      assert(lines.length === 1, `chunk ${size}: lines=${lines.length}`);
+      const parsed = parseSseLine(lines[0]);
+      const got = parsed?.response?.candidates?.[0]?.content?.parts?.[0]?.functionCall?.args
+        ?.Contents as string | undefined;
+      assert(got === contents, `chunk ${size} Contents mismatch (FFFD=${got?.includes('�')})`);
+    }
+  }
 
   // 静默 exit 0
   process.exit(0);

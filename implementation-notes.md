@@ -338,7 +338,7 @@ byte-identical to leakcheck.prototype.mjs output = true
 |----|------|------|
 | labels | P0 最小集 3 键（trajectory_id / last_step_index / used_claude） | 已实证 200；省略 model_enum 等 |
 | sessionId | randomBytes(8)→asIntN(64)→负绝对值字符串 | 对齐实录负 int64 形状；会话内稳定由调用方缓存 |
-| SSE 行缓冲 | TextDecoder + `\n` 切，跨 chunk 留 buffer | chunk 边界切断 data 行 |
+| SSE 行缓冲 | `SseLineReader`：`StringDecoder` + `\n` 切，跨 chunk 留 buffer | chunk 边界既切断 data 行，也会切断 3 字节 UTF-8。2026-09-09 前误用 `chunk.toString('utf8')` 再拼接，汉字/制表符会变成 U+FFFD；现已改回跨 chunk 解码 |
 | 末帧 | `!functionCall && text==='' && thoughtSignature` → skip | §1.4；签名不属于任何 FC，text:"" 非内容 |
 | FC part | 原样 `push(part)` 引用 | thoughtSignature 是兄弟键，改字节即 400 |
 | usage | 每帧覆盖 | 上游发累计值 |

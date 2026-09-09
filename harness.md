@@ -130,6 +130,7 @@ Claude 客户端
 - `systemInstruction.role` 为 `user`，tool mode 为 `VALIDATED`，FC/FR history role 都是 `model`，FR 只含 `{ output: string }`。
 - `thoughtSignature` 是 `functionCall` 的兄弟字段，必须原样保留。并行 FC 即使只有首个带签名，也保持原顺序和分组。
 - 上游 usage frame 是累计值，应覆盖旧值；普通文本为增量。末尾空 text/signature frame 不是 function call。
+- 上游 SSE/HTTP 响应必须跨 chunk 做 UTF-8 解码：流式用 `SseLineReader`（`StringDecoder`），完整 JSON 用 `readStreamUtf8`（先 concat 再 decode）。禁止对每个 Buffer `toString('utf8')` 后再拼接，否则 3 字节汉字/制表符会在 chunk 边界变成 U+FFFD。
 - 传输有意使用 `node:http`/`node:https` 控制 header 名、顺序和 chunking，并避免浏览器自动 headers；当前未复刻 IDE 的 Go TLS 指纹。
 - 合成 shell 片段通过 `sq` 引用模型提供的搜索路径、query、include glob 和 cwd。`run_command.CommandLine` 是有意交给 Claude Bash 执行的命令。
 - OAuth client、bearer/refresh token 不得进入源码、capture、日志、测试输出或文档。Debug 输出仍可能含用户 prompt、规则、路径和工具结果。

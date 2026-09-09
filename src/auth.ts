@@ -2,7 +2,7 @@ import fs from 'fs';
 import config from './config';
 import type { TokenEntry, TokenFile } from './types';
 import { ensureConfigDir, getDefaultTokenPath } from './token-paths';
-import { postStream, decodeBody } from './antigravity-client';
+import { postStream, decodeBody, readStreamUtf8 } from './antigravity-client';
 import { extractOAuthClient } from './extract-token';
 
 /**
@@ -133,13 +133,7 @@ export async function ensureProjectId(entry: TokenEntry): Promise<string> {
   // 一律 Content-Length。
   const res = await postStream(url, entry.accessToken, payload, undefined, false);
 
-  const text = await new Promise<string>((resolve) => {
-    let s = '';
-    const body = decodeBody(res);
-    body.on('data', (c: Buffer) => (s += c.toString('utf8')));
-    body.on('end', () => resolve(s));
-    body.on('error', () => resolve(s));
-  });
+  const text = await readStreamUtf8(decodeBody(res));
   const status = res.statusCode ?? 0;
   let json: Record<string, unknown>;
   try {
