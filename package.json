@@ -1,5 +1,5 @@
 {
-  "name": "antigravityide2api",
+  "name": "@cddchen/antigravityide2api",
   "version": "0.1.0",
   "description": "Antigravity IDE Agent API → Anthropic Messages compatible proxy",
   "main": "dist/server.js",
@@ -15,16 +15,28 @@
     "docs/fetch-available-models.capture.json",
     "token.json.example",
     "README_zh.md",
-    "READ.md"
+    "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run test",
     "start": "node dist/cli.js",
     "dev": "tsc --watch",
     "extract-token": "node dist/cli.js extract-token",
     "test": "npm run build && node scripts/run-tests.mjs",
     "leakcheck": "node docs/leakcheck.prototype.mjs"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cddchen/antigravityide2api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cddchen/antigravityide2api/issues"
+  },
+  "homepage": "https://github.com/cddchen/antigravityide2api#readme",
   "keywords": [
     "antigravity",
     "anthropic",
