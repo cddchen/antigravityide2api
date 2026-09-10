@@ -111,7 +111,7 @@ node dist/cli.js stop     # 停止后台服务
 ```bash
 PORT=4000 DUMP_SYSTEM=1 DEBUG=1 node dist/server.js
 ```
-> 服务启动后，浏览器打开 `http://127.0.0.1:4000/logcat` 可实时查看入站 `/v1/messages` 与出站 Antigravity `contents`（同一帧；不含 token）。
+> 服务启动后，浏览器打开 `http://127.0.0.1:4000/logcat` 可实时查看入站 `/v1/messages`、出站 Antigravity `contents`，以及每轮上游 `functionCall` 与桥接结果（同一帧；不含 token）。
 
 ### 5. 运行测试套件
 
@@ -151,6 +151,8 @@ claude
 | `stop` | 停止后台守护进程 |
 | `status` | 显示凭证文件路径、脱敏账号数量及进程运行状态 |
 | `extract-token` | 仅只读提取本机 Antigravity IDE 的 OAuth 凭证 |
+| `trim-words` | 查看生效过滤词（默认 ∪ 文件 ∪ env） |
+| `trim-words add/rm/clear` | 向配置目录追加 / 删除 / 清空持久化过滤词 |
 | `-h` / `--help` | 查看 CLI 命令帮助 |
 
 ---
@@ -172,6 +174,7 @@ claude
 | `ANTIGRAVITY_BASE` | `https://daily-cloudcode-pa.googleapis.com` | 上游服务基地址 |
 | `IDE_VERSION` | 本机 `product.json` 的 `ideVersion` | 上游请求元数据与 User-Agent 版本，默认自动探测 |
 | `ANTIGRAVITY_SYSTEM` | `trimmed` | 系统提示词构建策略：`full` / `trimmed` / `short` |
+| `ANTIGRAVITY_TRIM_WORDS` | 空 | 额外过滤词（逗号分隔或 JSON 数组）。不区分大小写的子串匹配；命中后替换为等长零宽字符，不删整段。较长词优先（`claude code` 先于 `claude`）。内置默认词仅 `trimmed` 模式生效，覆盖 `communication_style` 里的 `file://` 与后台任务用语。持久化文件为 token 同级 `trim-words.json`。改词表后需重启。 |
 
 ---
 

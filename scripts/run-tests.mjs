@@ -36,6 +36,7 @@ const suite = [
   { name: 'self pending-session', cmd: [process.execPath, path.join(root, 'dist/pending-session.js')] },
   { name: 'self anthropic', cmd: [process.execPath, path.join(root, 'dist/anthropic.js')] },
   { name: 'self logcat', cmd: [process.execPath, path.join(root, 'dist/logcat.js')] },
+  { name: 'self trim-words', cmd: [process.execPath, path.join(root, 'dist/trim-words.js')] },
 ];
 
 const rows = [];

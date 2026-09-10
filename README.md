@@ -111,7 +111,7 @@ node dist/cli.js stop     # Stop daemon
 ```bash
 PORT=4000 DUMP_SYSTEM=1 DEBUG=1 node dist/server.js
 ```
-> Once started, visit `http://127.0.0.1:4000/logcat` to inspect inbound `/v1/messages` and outbound Antigravity `contents` in real time (same frame; no tokens).
+> Once started, visit `http://127.0.0.1:4000/logcat` to inspect inbound `/v1/messages`, outbound Antigravity `contents`, and each upstream functionCall plus its bridge mapping in real time (same frame; no tokens).
 
 ### 5. Run Tests
 
@@ -151,6 +151,8 @@ Commands can be invoked via `antigravityide2api <command>` or `npx @cddchen/anti
 | `stop` | Stop background daemon |
 | `status` | Display token path, masked account count, and process status |
 | `extract-token` | Read OAuth credentials from the local Antigravity IDE |
+| `trim-words` | List effective filter words (defaults ∪ file ∪ env) |
+| `trim-words add/rm/clear` | Persist extra filter words in the config directory |
 | `-h` / `--help` | Show CLI usage help |
 
 ---
@@ -170,6 +172,7 @@ Commands can be invoked via `antigravityide2api <command>` or `npx @cddchen/anti
 | `ANTIGRAVITY_BASE` | `https://daily-cloudcode-pa.googleapis.com` | Upstream API base endpoint |
 | `IDE_VERSION` | local `product.json` `ideVersion` | Metadata and User-Agent version (auto-detected from local IDE) |
 | `ANTIGRAVITY_SYSTEM` | `trimmed` | System prompt strategy: `full` / `trimmed` / `short` |
+| `ANTIGRAVITY_TRIM_WORDS` | Empty | Extra filter words (comma-separated or JSON array). Case-insensitive substring match; hits become equal-length zero-width spaces, not deleted as whole lines. Longer phrases win (`claude code` before `claude`). Built-in defaults (trimmed mode only) cover `file://` and background-task phrases in `communication_style`. File: `trim-words.json` next to the token. Restart after changes. |
 
 ---
 

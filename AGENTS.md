@@ -20,6 +20,7 @@
 - `src/server.ts`：HTTP 组合根，以及新请求/续轮分支。
 - `src/anthropic.ts`：Claude 请求提取和 Anthropic JSON/SSE 响应。
 - `src/system-prompt.ts`：Prompt 重建、rule/skill 提取和泄漏扫描。
+- `src/trim-words.ts`：systemInstruction 过滤词表（默认 ∪ 文件 ∪ env）与零宽替换。
 - `src/antigravity-client.ts`：上游 envelope、受控 HTTP 传输、SSE 解析和超时。
 - `src/auth.ts`、`src/extract-token.ts`、`src/token-paths.ts`：凭证、project 发现和本地 token 路径。
 - `src/native-tools.ts`、`src/tool-bridge.ts`、`src/pending-session.ts`：原生目录、语义工具映射和进程内续轮状态。
@@ -29,7 +30,8 @@
 
 ## 硬性所有权与分层规则
 
-- `src/server.ts` 只做编排。Claude wire 转换放在 `anthropic.ts`，system 过滤放在 `system-prompt.ts`，上游 wire 行为放在 `antigravity-client.ts`，凭证放在 `auth.ts`/`extract-token.ts`，工具语义映射放在 `tool-bridge.ts`，pending 索引/过期放在 `pending-session.ts`。
+- `src/server.ts` 只做编排。Claude wire 转换放在 `anthropic.ts`，system 过滤放在 `system-prompt.ts`，过滤词表与零宽替换放在 `trim-words.ts`，上游 wire 行为放在 `antigravity-client.ts`，凭证放在 `auth.ts`/`extract-token.ts`，工具语义映射放在 `tool-bridge.ts`，pending 索引/过期放在 `pending-session.ts`。
+- trimmed 过滤词命中后在 systemInstruction 里替换为等长零宽字符，不得删整段/整行。匹配不区分大小写，较长词优先。词表 = 内置默认 ∪ `trim-words.json` ∪ `ANTIGRAVITY_TRIM_WORDS`。默认词只在 `trimmed` 模式启用。
 - 严禁上传 Claude 入站 `tools[]`、Claude 身份/system 文本、中途 `role: "system"` 内容或没有原始签名的历史工具块。必须重建 system instruction，并以原生目录替换工具。
 - 保留发送前泄漏闸门。上游必须收到 capture 顺序下严格 14 个原生工具项，每项一个 declaration。当前只支持 6 个映射，不代表可以移除另外 8 个声明。
 - Capture 表示已观测契约。只有取得脱敏且可复现的证据时才能重新生成或修订，并同时更新对应 mapper、测试和文档。

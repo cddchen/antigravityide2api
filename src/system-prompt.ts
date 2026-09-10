@@ -6,6 +6,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { maskTrimWords, resolveTrimWords } from './trim-words';
 import {
 AnthropicContentBlock,
 AnthropicMessagesRequest,
@@ -536,24 +537,12 @@ const lines = skills
 return `${head}Available skills:\n${lines}\n</skills>`;
 }
 
-/** 原型 L45-48：删 file:// 链接规则与后台任务规则 */
-function filterCommunicationStyle(raw: string): string {
-return raw
-  .split('\n')
-  .filter(
-    (l) =>
-      !/file:\/\/|clickable links|background task such as|task-20|DO NOTHING ELSE|^A\) |^B\) /.test(
-        l,
-      ),
-  )
-  .join('\n');
-}
-
 /**
 * 组装上游 systemInstruction 文本。
-* - trimmed（默认）：identity + user_information + ephemeral + user_rules + skills + guidelines + communication_style(改)
-* - full：capture 原文，但 user_information 段仍替换为重建版
-* - short：identity + user_information
+* - trimmed（默认）：identity + user_information + ephemeral + user_rules + skills + guidelines + communication_style
+*   communication_style 不再删行；过滤词（默认 ∪ 文件 ∪ env）命中处换等长 U+200B
+* - full：capture 原文，但 user_information 段仍替换为重建版；只遮文件/env 额外词
+* - short：identity + user_information；只遮文件/env 额外词
 *
 * user_rules/skills 的**位置**照抓包：ephemeral(5559) < customizations(5872) <
 * user_rules(8759) < skills(9161) < … < guidelines(29286) < communication_style(34871)。
@@ -562,6 +551,7 @@ return raw
 export function buildSystemInstruction(
 env: ExtractedEnv,
 mode: 'full' | 'trimmed' | 'short' = 'trimmed',
+trimWords?: readonly string[],
 ): string {
 const userInfo = buildUserInformation(env);
 // rules 为空但 userRules 非空 = 旧形态 body（无 Contents of 头），退回单块
@@ -570,30 +560,30 @@ const userRules =
   (env.userRules ? `<user_rules>\n${env.userRules}\n</user_rules>` : '');
 const skills = buildSkills(env.skills ?? []);
 
+let out: string;
 if (mode === 'short') {
-  return [section('identity'), userInfo].filter(Boolean).join('\n');
-}
-
-if (mode === 'full') {
+  out = [section('identity'), userInfo].filter(Boolean).join('\n');
+} else if (mode === 'full') {
   // 保留全文，只替换 user_information 段（offset/chars 来自 sections.json）
   const capture = loadCapture();
   const ui = loadSections().get('user_information')!;
-  return (
-    capture.slice(0, ui.offset) + userInfo + capture.slice(ui.offset + ui.chars)
-  );
+  out =
+    capture.slice(0, ui.offset) + userInfo + capture.slice(ui.offset + ui.chars);
+} else {
+  out = [
+    section('identity'),
+    userInfo,
+    section('ephemeral_message'),
+    userRules,
+    skills,
+    section('guidelines'),
+    section('communication_style'),
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-// trimmed
-const commStyle = filterCommunicationStyle(section('communication_style'));
-return [
-  section('identity'),
-  userInfo,
-  section('ephemeral_message'),
-  userRules,
-  skills,
-  section('guidelines'),
-  commStyle,
-]
-  .filter(Boolean)
-  .join('\n');
+const words =
+  trimWords ?? resolveTrimWords({ includeDefaults: mode === 'trimmed' });
+return maskTrimWords(out, words);
 }

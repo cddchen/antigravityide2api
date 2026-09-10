@@ -910,7 +910,7 @@ Skill 正文只剩占位句。
 终端 `[in]` 不够看整段 transcript。`DEBUG=1`（或 `true`/`yes`）启动时：
 
 - 挂 `GET /logcat`（HTML）、`/logcat/snapshot`、`/logcat/stream`（SSE）
-- 每次 `/v1/messages` 拍一帧：全部 `idx:role(kinds)` **默认折叠**，点击展开块正文（tool_use input / tool_result，单块截 12KB）
+- 每次 `/v1/messages` 拍一帧：全部 `idx:role(kinds)` **默认折叠**，点击展开块正文（tool_use input / tool_result / 出站 systemInstruction，正文不截断；折叠行仍 160 字预览）
 - 尾条 `role !== user` 标「截断扫描」——跳过 trailing `role:system` 后再看
 - 不改分支 A/B；无 API key（默认 `127.0.0.1`）。环保留 20 帧。
 
@@ -922,6 +922,15 @@ Skill 正文只剩占位句。
 - `thoughtSignature` 只记 `sig:NB`，不写签名正文；不含 token
 - 本地 400（empty contents / 未等齐 / unknown tool_use_id）和 `sendErr` 上游 400 写到 `frame.error`，导航栏可见
 - 出站 lastRole=`model` 在导航标黄（正是 model-turn 400 的形状）
+
+## `/logcat` 上游回合 / 工具桥（2026-09-10）
+
+入站只有 CC 的 `tool_use`/`tool_result`，出站 contents 要等下一轮才带上 FC+FR。排查中途调用时，需要在 `streamGenerate` 刚回来时拍一帧。
+
+- 同一入站帧挂 `turns[]`，与 `outbound[]` 按下标对齐：先出站请求，再上游回合（文本 / functionCall / reject-all）
+- 每个 FC 记 native 名+args（正文不截断）、`sig:NB`、桥接结果（`→Read/Bash/...` 或 `→reject` 原因）；不写 thought 正文、不含 token
+- 仅 `DEBUG=1`（`true`/`yes`）时 `captureTurn`；关闭 DEBUG 不挂 `/logcat`，也不记回合
+- 导航栏显示最近一回合 `kind` + 预览（`list_dir→Bash`）
 
 ## 丢弃对话中途的 role:system（2026-08-13）
 
@@ -1091,4 +1100,19 @@ CC 在文本回合（`fc=0`）结束后常再发一条几乎全是 `<system-remi
 ### 验证
 
 anthropic 自检：mixed reminder + `hello world` 仍只留正文；reminder-only last user 包进 `<USER_REQUEST>`；`assistant(text)` + reminder-only user 的 contents 以 user 结尾。T6 6.15：同上且 mock body 无标签。
+
+## trimmed 过滤词改零宽替换（2026-09-10）
+
+旧 `filterCommunicationStyle` 按正则**删整行**（`file://` / clickable links / 后台任务 A/B）。要加用户词时，删段会把周围指令一并拿掉。
+
+### 决策
+
+1. 命中后把该子串换成等长 U+200B，行还在。匹配不区分大小写；较长词优先。
+2. 词表 = 内置默认（旧 commStyle 那些短语）∪ `~/.antigravityide2api/trim-words.json` ∪ `ANTIGRAVITY_TRIM_WORDS`（逗号或 JSON 数组）。
+3. 默认词只在 `ANTIGRAVITY_SYSTEM=trimmed` 启用，避免 `full` 把 artifacts 里的 `file://` 也遮掉。文件/env 额外词三种 mode 都生效。
+4. CLI：`trim-words` / `add` / `rm` / `clear`。改文件后需重启。
+
+### 验证
+
+`trim-words` 自检：遮词不删行、大小写不敏感、长词优先、CSV/JSON、文件 roundtrip。T4 4.12：`file://` 等原文消失但 `You MUST create` / `either proceed…` 仍在；4.17/4.18 额外词同样只遮命中处。
 

@@ -229,7 +229,7 @@ data: {"response":{"candidates":[{"content":{"role":"model","parts":[…]},
 | 23998 | `planning_mode` | 2477 | ❌ |
 | 26476 | `planning_mode_artifacts` | 2365 | ❌ |
 | 28842 | `guidelines` | 5584 | ✅ 原样（22 条工程纪律，主要价值） |
-| 34427 | `communication_style` | 1101 | ⚠️ 改（删 `file://` 链接规则、后台任务规则） |
+| 34427 | `communication_style` | 1101 | ⚠️ 改（`file://` / 后台任务用语换成等长零宽，**不删行**；词表见 `ANTIGRAVITY_TRIM_WORDS` / `trim-words.json`） |
 
 保留 5 段合计 8356 字符，丢弃 10 段合计 **27158** 字符（8356 + 27158 + 14 个段间换行 = 35528 ✅）。实际组装后 ≈ 7.6–7.8k（`user_information` 重写后比原 638 短）。
 

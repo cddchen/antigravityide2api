@@ -79,7 +79,9 @@
 | 4.9 | CLAUDE.md 正文首行是 `# CLAUDE.md` 时 `userRules` **非空** | 坑 2：前瞻白名单 |
 | 4.10 | `userRules` **不含** `Contents of ` 与 `.claude` | 坑 3：包装头 |
 | 4.11 | 构造 `cwd=/private/tmp/x` + `additional=['/tmp/x']`（同一 realpath）→ `<user_information>` 说 **1 active workspace** | 坑 4：symlink 去重 |
-| 4.12 | `communication_style` 段里**不含** `file://` 与后台任务规则 | 组装规格 |
+| 4.12 | `communication_style` 段里**不含** `file://` 与后台任务规则原文，但整行仍在（零宽替换） | 组装规格 |
+| 4.17 | 额外过滤词只遮命中词、不删段；`parseTrimWordsSpec` 接受逗号与 JSON 数组 | 过滤词表 |
+| 4.18 | 过滤词匹配不区分大小写；`claude`+`claude code` 时长词优先 | 过滤词表 |
 | 4.13 | `system` 传 string（非数组）也能正确 `extractEnv` | 契约是 union |
 
 ## T5 `scripts/test-pending.mjs` —— 多轮状态机（400 陷阱回归）

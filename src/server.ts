@@ -29,6 +29,7 @@ import {
 captureError,
 captureInbound,
 captureOutbound,
+captureTurn,
 debugEnabled,
 mountLogcat,
 } from './logcat';
@@ -319,21 +320,76 @@ return streamGenerate({
 logTurn(opts.model, stepIndex, result);
 
 if (result.fcParts.length === 0) {
+if (debugEnabled()) {
+ captureTurn({
+   stepIndex,
+   kind: 'text',
+   text: result.text,
+   thoughtText: result.thoughtText,
+   finishReason: result.finishReason,
+   usage: result.usage,
+   calls: [],
+ });
+}
 return { kind: 'text', result, stepIndex, projectId };
 }
 
 const toolUses: BridgedToolUse[] = [];
 const rejectFrParts: NativePart[] = [];
+const callLogs: Array<{
+ nativeId: string;
+ nativeName: string;
+ args: Record<string, unknown>;
+ thoughtSignatureBytes: number;
+ outcome: 'tool_use' | 'reject';
+ claudeName?: string;
+ claudeId?: string;
+ claudeInput?: Record<string, unknown>;
+ rejectReason?: string;
+}> = [];
 for (const part of result.fcParts) {
 const fc = part.functionCall;
 if (!fc) continue;
 const outcome = bridgeFunctionCall(fc, opts.workspaceRoot || undefined);
+const thoughtSignatureBytes = part.thoughtSignature
+ ? Buffer.byteLength(part.thoughtSignature, 'utf8')
+ : 0;
 if (outcome.kind === 'tool_use') {
  toolUses.push(outcome.value);
+ callLogs.push({
+   nativeId: fc.id,
+   nativeName: fc.name,
+   args: fc.args ?? {},
+   thoughtSignatureBytes,
+   outcome: 'tool_use',
+   claudeName: outcome.value.claudeName,
+   claudeId: outcome.value.toolUseId,
+   claudeInput: outcome.value.input,
+ });
 } else {
  // reject：不写 tool_use，只记 FR
  rejectFrParts.push({ functionResponse: rejectionOutput(outcome.value) });
+ callLogs.push({
+   nativeId: fc.id,
+   nativeName: fc.name,
+   args: fc.args ?? {},
+   thoughtSignatureBytes,
+   outcome: 'reject',
+   rejectReason: outcome.value.reason,
+ });
 }
+}
+
+if (debugEnabled()) {
+captureTurn({
+ stepIndex,
+ kind: toolUses.length === 0 ? 'reject-all' : 'tool_use',
+ text: result.text,
+ thoughtText: result.thoughtText,
+ finishReason: result.finishReason,
+ usage: result.usage,
+ calls: callLogs,
+});
 }
 
 if (toolUses.length === 0) {

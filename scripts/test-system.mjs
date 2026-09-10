@@ -16,6 +16,8 @@ const {
   LEAK_BLACKLIST,
   ruleTagFromPath,
 } = sp;
+const tw = await import(path.join(root, 'dist/trim-words.js'));
+const { DEFAULT_TRIM_WORDS, ZWSP, parseTrimWordsSpec } = tw;
 
 const ccBody = JSON.parse(
   fs.readFileSync(path.join(root, 'docs/cc-request.capture.json'), 'utf8'),
@@ -43,10 +45,10 @@ assert.ok(
     // identity + user_information + ephemeral 三段：原型开头到 </ephemeral_message>
     const upto = (s) => s.slice(0, s.indexOf('</ephemeral_message>') + 20);
     assert.equal(upto(out), upto(proto), 'identity/user_information/ephemeral 与原型一致');
-    // guidelines / communication_style：原型的 </ephemeral_message> 之后即这两段
+    // guidelines：原型把 communication_style 整行删掉，现已改为遮词，不再逐字节比 commStyle
     const after = proto.slice(proto.indexOf('</ephemeral_message>') + 21);
-    const tail = after.slice(0, after.indexOf('<user_rules>')).trimEnd();
-    assert.ok(out.includes(tail), 'guidelines/communication_style 与原型一致');
+    const guidelines = after.slice(0, after.indexOf('<communication_style>')).trimEnd();
+    assert.ok(out.includes(guidelines), 'guidelines 与原型一致');
   } finally {
     try {
       fs.unlinkSync(tmpOut);
@@ -170,14 +172,52 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   }
 }
 
-// 4.12 communication_style 段不含 file:// 与后台任务规则
+// 4.12 communication_style：命中词换成零宽，整行仍在
 {
   const m = out.match(/<communication_style>[\s\S]*?<\/communication_style>/);
   assert.ok(m, '应有 communication_style 段');
   assert.ok(!m[0].includes('file://'), 'commStyle 不得含 file://');
   assert.ok(
     !/background task such as|task-20|DO NOTHING ELSE/.test(m[0]),
-    'commStyle 不得含后台任务规则',
+    'commStyle 不得含后台任务规则原文',
+  );
+  assert.ok(m[0].includes('You MUST create'), '不得删 clickable links 整行');
+  assert.ok(
+    m[0].includes('either proceed to other relevant work'),
+    '不得删 A) 整行',
+  );
+  assert.ok(m[0].includes(ZWSP), '命中词须换成零宽');
+  assert.ok(
+    m[0].includes(ZWSP.repeat('clickable links'.length)),
+    'clickable links 须等长零宽',
+  );
+}
+
+// 4.17 额外过滤词（第三参）同样遮词不删段
+{
+  const extra = 'Keep your responses concise';
+  const si = buildSystemInstruction(env, 'trimmed', [...DEFAULT_TRIM_WORDS, extra]);
+  assert.ok(!si.includes(extra), '额外过滤词原文不得出现');
+  const m = si.match(/<communication_style>[\s\S]*?<\/communication_style>/);
+  assert.ok(m, '应有 communication_style 段');
+  assert.ok(m[0].includes(`- ${ZWSP.repeat(extra.length)}.`), '只遮词，破折号与句点仍在');
+  assert.deepEqual(parseTrimWordsSpec('a, b ,c'), ['a', 'b', 'c']);
+  assert.deepEqual(parseTrimWordsSpec('["x"," y "]'), ['x', 'y']);
+}
+
+// 4.18 不区分大小写；长词优先
+{
+  const extra = 'keep your responses concise';
+  const si = buildSystemInstruction(env, 'trimmed', [...DEFAULT_TRIM_WORDS, extra]);
+  assert.ok(
+    !si.includes('Keep your responses concise'),
+    '大小写不同也须遮住',
+  );
+  const m = si.match(/<communication_style>[\s\S]*?<\/communication_style>/);
+  assert.ok(m, '应有 communication_style 段');
+  assert.ok(
+    m[0].includes(`- ${ZWSP.repeat(extra.length)}.`),
+    '大小写不同仍只遮词',
   );
 }
 
@@ -323,4 +363,4 @@ assert.ok(!env.userRules.includes('.claude'), 'userRules 不得含 .claude');
   assert.deepEqual(scanLeaks(si), [], 'RULE 正文里的黑名单词不得命中');
 }
 
-console.log('PASS test-system.mjs (16 assertion groups)');
+console.log('PASS test-system.mjs (18 assertion groups)');

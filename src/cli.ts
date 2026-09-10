@@ -16,6 +16,16 @@ import {
   maskToken,
   tokenFileExists,
 } from './token-paths';
+import {
+  DEFAULT_TRIM_WORDS,
+  addTrimWords,
+  clearTrimWords,
+  getTrimWordsPath,
+  loadTrimWordsFile,
+  parseTrimWordsSpec,
+  removeTrimWords,
+  resolveTrimWords,
+} from './trim-words';
 
 const PID_FILE_NAME = 'server.pid';
 const LOG_FILE_NAME = 'server.log';
@@ -31,12 +41,18 @@ function printHelp(): void {
   antigravityide2api stop         停止后台进程
   antigravityide2api status       查看 token / 进程状态
   antigravityide2api extract-token  从本机 Antigravity IDE 提取凭证
+  antigravityide2api trim-words           查看过滤词（默认 ∪ 文件 ∪ env）
+  antigravityide2api trim-words add WORD  追加持久化过滤词
+  antigravityide2api trim-words rm WORD   删除持久化过滤词
+  antigravityide2api trim-words clear     清空持久化过滤词
   antigravityide2api --help
 
 Env:
   PORT HOST API_KEY TOKEN_FILE DEFAULT_MODEL WORKSPACE_ROOT
   REQUEST_TIMEOUT PENDING_TIMEOUT ANTIGRAVITY_BASE IDE_VERSION ANTIGRAVITY_SYSTEM
+  ANTIGRAVITY_TRIM_WORDS
   IDE_VERSION 默认从本机 product.json 的 ideVersion 读取，不必再手写
+  ANTIGRAVITY_TRIM_WORDS 额外过滤词（逗号或 JSON 数组）；命中后换零宽，不删整段；匹配不区分大小写
 `);
 }
 
@@ -298,6 +314,76 @@ function printStatus(tokenPath: string): void {
   if (running) console.log(`  日志: ${logFile}`);
 }
 
+function printWordList(label: string, words: readonly string[], extra = ''): void {
+  console.log(`  ${label} (${words.length})${extra ? ` ${extra}` : ''}`);
+  if (words.length === 0) {
+    console.log('    (无)');
+    return;
+  }
+  for (const w of words) console.log(`    - ${JSON.stringify(w)}`);
+}
+
+function runTrimWordsCommand(args: string[]): void {
+  const filePath = getTrimWordsPath();
+  const sub = args[0];
+  const rest = args.slice(1);
+
+  const fail = (msg: string): void => {
+    console.error(`  ${msg}`);
+    process.exitCode = 1;
+  };
+
+  try {
+    if (!sub || sub === 'list') {
+      let fromEnv: string[] = [];
+      try {
+        fromEnv = parseTrimWordsSpec(process.env.ANTIGRAVITY_TRIM_WORDS);
+      } catch (e) {
+        fail(`ANTIGRAVITY_TRIM_WORDS 无效: ${(e as Error).message}`);
+        return;
+      }
+      const fromFile = loadTrimWordsFile(filePath, { strict: true });
+      printWordList('默认', DEFAULT_TRIM_WORDS, '仅 trimmed 模式');
+      printWordList('文件', fromFile, filePath);
+      printWordList('环境 ANTIGRAVITY_TRIM_WORDS', fromEnv);
+      printWordList('生效', resolveTrimWords());
+      console.log(
+        '  命中后替换为等长零宽字符，不删整段；匹配不区分大小写。改文件后需重启服务。',
+      );
+      return;
+    }
+    if (sub === 'add') {
+      if (rest.length === 0) {
+        fail('trim-words add 需要至少一个词');
+        return;
+      }
+      const next = addTrimWords(rest, filePath);
+      console.log(`  已写入 ${filePath} (${next.length})`);
+      for (const w of next) console.log(`    - ${JSON.stringify(w)}`);
+      return;
+    }
+    if (sub === 'rm' || sub === 'remove') {
+      if (rest.length === 0) {
+        fail('trim-words rm 需要至少一个词');
+        return;
+      }
+      const next = removeTrimWords(rest, filePath);
+      console.log(`  已写入 ${filePath} (${next.length})`);
+      for (const w of next) console.log(`    - ${JSON.stringify(w)}`);
+      return;
+    }
+    if (sub === 'clear') {
+      clearTrimWords(filePath);
+      console.log(`  已清空 ${filePath}`);
+      return;
+    }
+    fail(`未知 trim-words 子命令: ${sub}`);
+    printHelp();
+  } catch (e) {
+    fail((e as Error).message);
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2).filter((a) => a !== '--');
   const cmd = args[0];
@@ -308,6 +394,11 @@ async function main(): Promise<void> {
   }
 
   const tokenPath = getDefaultTokenPath();
+
+  if (cmd === 'trim-words') {
+    runTrimWordsCommand(args.slice(1));
+    return;
+  }
 
   if (cmd === 'extract-token') {
     try {

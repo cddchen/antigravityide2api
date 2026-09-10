@@ -51,7 +51,7 @@ Claude 客户端
 | Function-call parts（含 `thoughtSignature`）作为一个有序 model content 回放，随后是 model role 的 function responses。 | `src/pending-session.ts`、`src/server.ts` | T2/T5/T6 + capture | 已核验当前状态 | 签名丢失不可恢复；声称可丢弃的旧文档已过时。 |
 | 凭证从 IDE 复制到独立的 0600 token 文件并在其中刷新，绝不写回 IDE 数据库。 | `src/extract-token.ts`、`src/auth.ts` | 生产代码 + auth 测试 | 已核验当前状态 | 本次未执行真实提取/刷新。 |
 | Pending、skill 清单缓存和 debug logcat 都只存在于内存。 | `src/pending-session.ts`、`src/system-prompt.ts`、`src/logcat.ts` | 生产代码 | 已核验当前状态 | 重启/过期会失去续轮能力；没有 restore。 |
-| 标准测试先构建，再运行 14 个条目。 | `package.json`、`scripts/run-tests.mjs` | 实际执行 `npm test` | 已核验当前状态 | 本机 13 个通过；T3 因缺少 `rg` 失败。 |
+| 标准测试先构建，再运行 15 个条目。 | `package.json`、`scripts/run-tests.mjs` | 实际执行 `npm test` | 已核验当前状态 | 2026-09-10 本机 15/15；T3 仍依赖 `rg`。 |
 
 ## 身份与状态
 
@@ -76,12 +76,13 @@ Claude 客户端
 | `src/server.ts` | HTTP 路由、鉴权、分支、编排和错误映射 | 原生声明内容或底层 HTTP 指纹。 |
 | `src/anthropic.ts` | 入站文本/tool-result 提取和 Anthropic JSON/SSE 输出 | 上游身份或凭证刷新。 |
 | `src/system-prompt.ts` | 环境/rule/skill 提取、prompt 重建、泄漏黑名单、skill 伪路径缓存 | 工具执行或 OAuth。 |
+| `src/trim-words.ts` | 过滤词表（默认 ∪ `trim-words.json` ∪ `ANTIGRAVITY_TRIM_WORDS`）与等长零宽替换 | 不删整段；匹配不区分大小写、较长词优先；默认词只在 `trimmed` 模式启用。 |
 | `src/native-tools.ts` | 加载和校验原生工具目录 | 被明确丢弃的 Claude 入站 `tools[]`。 |
 | `src/antigravity-client.ts` | Envelope、受控 HTTP headers、gzip/SSE、usage、超时 | Token 持久化和 Claude 响应格式。 |
 | `src/auth.ts`、`src/extract-token.ts` | Token 读写、OAuth refresh、project 发现、只读 IDE 提取 | HTTP 路由和对话状态。 |
 | `src/tool-bridge.ts` | 6 个已支持映射、结果整形、shell 引用、Write/Edit 路径拒绝 | Pending 生命周期或实际工具执行。 |
 | `src/pending-session.ts` | 内存 tool-ID 索引、过期、成组 FC/FR 追加 | 持久化 restore。 |
-| `src/logcat.ts` | `DEBUG` 下的有界内存调试视图：入站 `/v1/messages` 与出站 Antigravity `contents`（同帧，含本地/上游 400） | 鉴权或持久化日志；不含 token；`thoughtSignature` 只记长度。 |
+| `src/logcat.ts` | `DEBUG` 下的有界内存调试视图：入站 `/v1/messages`、出站 Antigravity `contents`、每轮上游 FC 与桥接结果（同帧，含本地/上游 400） | 鉴权或持久化日志；不含 token；`thoughtSignature` 只记长度；thought 正文不入库。 |
 
 配置在模块加载时求值；进程启动后修改环境变量不会重新配置服务。
 
@@ -100,7 +101,7 @@ Claude 客户端
 ### 新请求
 
 1. `parseToolResults` 扫描末尾连续 user 段。没有当前 tool result 时，创建新的上游 session/cascade/trajectory 身份。同条 user 上 `tool_result` 旁边的非 reminder 文本由 `extractToolResultSiblingText` 抽出：无论 pending 是否命中都落到分支 A（新 session）；命中则先丢掉 pending，避免后续纯 `tool_result` 续进旧 cascade。纯 `tool_result` 且 pending miss 仍 400。`/compact` 只是这种 `tool_result+text` 形状的一个来源，不按字面检测。不得 HIT+extra 续轮：会把截图等大 FR 再送上游，返回的 usage 会让 CC autocompact 打转。
-2. `extractEnv` 只提取选定的 workspace/platform/git/rule/skill 信息；`buildSystemInstruction` 使用入库 capture sections 重建 `full`、`trimmed` 或 `short` 文本。
+2. `extractEnv` 只提取选定的 workspace/platform/git/rule/skill 信息；`buildSystemInstruction` 使用入库 capture sections 重建 `full`、`trimmed` 或 `short` 文本。`trimmed` 不再按行删除 `communication_style`；过滤词命中处换成等长 U+200B（默认词 ∪ 配置文件 ∪ env）。
 3. `buildContents` 转发文本历史，把 `assistant` 映射为上游 `model`。历史与旁路正文整块丢掉 `<system-reminder>`；user 轮剥完若空则改用 reminder 内文（会话末总结），避免 contents 以 `model` 结尾被上游 400。标签本身不上游。丢弃中途 `system` 和历史工具块，只把最后一条 user 文本包装为 `<USER_REQUEST>`。`extractToolResultSiblingText` 仍整块剥 reminder，reminder-only 不算 extra。
 4. Claude 入站工具目录被丢弃。加载并校验 14 项原生 capture 后，`assertSafeToSend` 在发送下游 SSE header 前拒绝非原生目录或 Claude 专属泄漏文本。
 5. `withAuth` 解析凭证/project，`streamGenerate` 发送 IDE 形态请求。文本要么累积为 JSON，要么由 `AnthropicSseWriter` 增量转发。
@@ -122,7 +123,7 @@ Claude 客户端
 - `streamGenerate`/`fetchAvailableModels` 总使用 `REQUEST_TIMEOUT`，也支持调用方 `AbortSignal`；但 `src/server.ts` 没把 HTTP 客户端断开传播过去。
 - Pending 在 `PENDING_TIMEOUT` 后过期；小于等于 0 表示禁用。过期或重启都会让 tool ID 变为 unknown。
 - 对话、pending FC、skill cache、logcat frame 都不会在重启后恢复。新请求仅从客户端 payload 重建文本历史并创建新上游身份。
-- 持久化仅包括 token JSON、其中的 refreshed/project 元数据、后台 PID/log 和显式 `DUMP_SYSTEM` 输出。`DUMP_SYSTEM=<path>` 以 0600 写入原始 prompt 数据，必须按敏感数据处理。
+- 持久化仅包括 token JSON、其中的 refreshed/project 元数据、后台 PID/log、`trim-words.json` 和显式 `DUMP_SYSTEM` 输出。`DUMP_SYSTEM=<path>` 以 0600 写入原始 prompt 数据，必须按敏感数据处理。过滤词文件改动需重启才进已运行进程。
 
 ## 协议与安全不变量
 
@@ -153,7 +154,7 @@ Claude 客户端
 | 层级 | 边界与依赖 | 命令 | 当前结果/缺口 |
 | --- | --- | --- | --- |
 | 编译 | 严格 TypeScript，`src/` -> 被忽略的 `dist/` | `npm run build` | 2026-09-04 通过。 |
-| 标准本地套件 | Envelope、SSE、bridge、system/leak、pending、server、headers、OAuth 与模块自检 | `npm test` | 13/14 通过；T3 需要本机缺少的 `rg`。list bridge 还依赖 Python 3。 |
+| 标准本地套件 | Envelope、SSE、bridge、system/leak、pending、server、headers、OAuth 与模块自检 | `npm test` | 2026-09-10 15/15；T3 需要 `rg`，list bridge 还依赖 Python 3。 |
 | 协议/泄漏夹具 | 已入库 Claude request 与 Antigravity system capture | `npm run leakcheck` | 黑名单命中 0；通过。 |
 | 本地集成 | Express 子进程 + 本地模拟 Google endpoints；真实 HTTP/SSE 与鉴权 | `npm test` 的 T6 | 通过；无真实 Google 流量。 |
 | 传输一致性 | 本地 capture server 检查 6 个上游 header 及顺序 | T9 | 通过；不验证 TLS/JA3。 |

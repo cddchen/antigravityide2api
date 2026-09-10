@@ -47,7 +47,7 @@ const config = {
   },
   /** Write/Edit 落盘边界；空 = 用 CC 抽出的 cwd */
   workspaceRoot: process.env.WORKSPACE_ROOT || '',
-  /** full | trimmed | short —— 见 wire-reference §1.5 */
+  /** full | trimmed | short —— 见 wire-reference §1.5。trimmed 过滤词见 ANTIGRAVITY_TRIM_WORDS / trim-words.json */
   systemMode: (process.env.ANTIGRAVITY_SYSTEM || 'trimmed') as 'full' | 'trimmed' | 'short',
   server: {
     port: parseInt(process.env.PORT || '3000', 10),
