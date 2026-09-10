@@ -107,10 +107,13 @@
 | 6.4 | `POST /v1/messages` 非流式、mock 回纯文本 → 200，`stop_reason:'end_turn'`，content[0].text 正确 | 首轮 |
 | 6.5 | mock 回一个 FC → 响应 `stop_reason:'tool_use'`，content 里有 tool_use 块，`name` ∈ `{Read,Bash,Write,Edit}` | 桥接 |
 | 6.6 | **mock 收到的请求体**：`tools` 14 项、`systemInstruction.role==='user'`、**不含** CC 的 25 个工具名、不含 `<system-reminder>` | 风控核心 |
+| 6.15 | 尾条 user 仅 `<system-reminder>` 内文 → 分支 A，`contents` 以 `role:'user'` 结尾，`<USER_REQUEST>` 含内文、不含标签 | 会话末总结不得 400 |
 | 6.7 | 带 tool_result 续轮 → mock 收到的 `contents` 里有连续两条 `role:'model'`，第一条含 FC + 原样 sig，第二条含 FR `{output}` | 400 陷阱 |
 | 6.8 | 续轮的 FR `output` 是**字符串**且以 `Created At:` 开头 | §1.3.1 |
 | 6.9 | mock 回 2 个 FC → 流式响应里 2 个 tool_use 块、1 次 `message_stop`、`stop_reason:'tool_use'` | 并行 |
-| 6.10 | 未知 `tool_use_id` 的 tool_result → 400 而非 500/挂死 | 健壮性 |
+| 6.10 | 未知 `tool_use_id` 的 **纯** tool_result → 400 而非 500/挂死 | 健壮性 |
+| 6.13 | 未知 `tool_use_id` + 同条 sibling text → 分支 A（新 session step=0，`<USER_REQUEST>` 含该文本，无 FC 回放） | compact / pending miss |
+| 6.14 | pending HIT + 同条 sibling text → 分支 A（新 session step=0，无 FC 回放）；随后同 id 纯 tool_result → 400 | compact 不得续进旧 cascade |
 | 6.11 | 流式：事件序列合法（`message_start` 唯一且第一、`message_stop` 唯一且最后、每个 `content_block_start` 有配对 `stop`） | SSE 协议 |
 | 6.12 | mock 回 401 → 服务端不把它当 500（能触发 refresh 路径；mock refresh 端点回新 token 后重试成功） | auth |
 

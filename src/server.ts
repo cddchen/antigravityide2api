@@ -13,6 +13,7 @@ buildErrorResponse,
 buildMessageResponse,
 buildToolUseResponse,
 buildContents,
+extractToolResultSiblingText,
 parseToolResults,
 type AnthropicUsage,
 } from './anthropic';
@@ -24,7 +25,13 @@ streamGenerate,
 } from './antigravity-client';
 import { loadTokenFile, withAuth } from './auth';
 import config from './config';
-import { captureInbound, debugEnabled, mountLogcat } from './logcat';
+import {
+captureError,
+captureInbound,
+captureOutbound,
+debugEnabled,
+mountLogcat,
+} from './logcat';
 import { getNativeTools, isNativeTool, NATIVE_TOOL_NAMES } from './native-tools';
 import {
 appendToolRound,
@@ -151,25 +158,24 @@ return `n=${msgs.length} last=[${parts.join(' ')}]`;
 }
 
 function logIncomingToolResults(
-body: AnthropicMessagesRequest,
-toolResults: ReturnType<typeof parseToolResults>,
+  body: AnthropicMessagesRequest,
+  toolResults: ReturnType<typeof parseToolResults>,
+  opts: { pendingHits: string[]; extra: boolean; branch: 'A' | 'B' },
 ): void {
-const shape = summarizeMessages(body);
-if (toolResults.length === 0) {
-console.log(`[in] ${shape} tool_result=0 → 分支A`);
-return;
-}
-const pendingHits = toolResults.map((r) =>
-getPendingByToolId(r.toolUseId) ? 'hit' : 'miss',
-);
-console.log(
-`[in] ${shape} tool_result=${toolResults.length} pending=[${pendingHits.join(',')}] → 分支B`,
-);
-for (const r of toolResults) {
-console.log(
-`  [tr] id=${r.toolUseId} err=${r.isError} ${omitText(r.content)}`,
-);
-}
+  const shape = summarizeMessages(body);
+  if (toolResults.length === 0) {
+    console.log(`[in] ${shape} tool_result=0 → 分支A`);
+    return;
+  }
+  const extraTag = opts.extra ? 'extra=text' : 'extra=none';
+  console.log(
+    `[in] ${shape} tool_result=${toolResults.length} pending=[${opts.pendingHits.join(',')}] ${extraTag} → 分支${opts.branch}`,
+  );
+  for (const r of toolResults) {
+    console.log(
+      `  [tr] id=${r.toolUseId} err=${r.isError} ${omitText(r.content)}`,
+    );
+  }
 }
 
 function logTurn(
@@ -220,6 +226,7 @@ const status = isAg ? (err as AntigravityError).status : 500;
 const message =
 err instanceof Error ? err.message : typeof err === 'string' ? err : 'internal error';
 console.error(`[error] status=${status} ${message}`);
+if (debugEnabled()) captureError(status, message);
 
 if (sse && !sse.ended) {
 // 流已开始：不能改 status，写错误文本到流并收尾
@@ -281,6 +288,16 @@ let rejectLoops = 0;
 
 while (true) {
 assertSafeToSend(opts.tools, opts.systemInstruction);
+if (debugEnabled()) {
+ captureOutbound({
+   model: opts.model,
+   stepIndex,
+   sessionId: opts.sessionId,
+   contents: opts.contents,
+   systemInstruction: opts.systemInstruction,
+   tools: opts.tools,
+ });
+}
 
 const result = await withAuth(opts.entry, async (accessToken, pid) => {
 projectId = pid;
@@ -483,45 +500,53 @@ let sse: AnthropicSseWriter | null = null;
 
 try {
   const toolResults = parseToolResults(body);
-  logIncomingToolResults(body, toolResults);
+  const extraText = extractToolResultSiblingText(body);
+  const pendingHits = toolResults.map((r) =>
+    getPendingByToolId(r.toolUseId) ? 'hit' : 'miss',
+  );
+  const pending =
+    toolResults.length > 0
+      ? getPendingByToolId(toolResults[0].toolUseId)
+      : undefined;
+  const extra = extraText.length > 0;
+  const skillLaunch = toolResults.some((r) => /^Launching skill:/m.test(r.content));
+  // 同条非 reminder 文本 = 新用户请求（/compact、打断）。不得续轮：
+  // 续进旧 cascade 会把截图等大 FR 再送上游，usage 爆掉后 autocompact 打转。
+  const extraAsNewRequest = extra && !skillLaunch;
+  const branch: 'A' | 'B' =
+    toolResults.length === 0 || extraAsNewRequest ? 'A' : 'B';
+  logIncomingToolResults(body, toolResults, { pendingHits, extra, branch });
   if (debugEnabled()) {
     captureInbound(body, {
       model,
       stream,
       toolResults,
-      pendingHits: toolResults.map((r) =>
-        getPendingByToolId(r.toolUseId) ? 'hit' : 'miss',
-      ),
+      pendingHits,
+      branch,
     });
   }
 const entry = firstTokenEntry();
 
-// ── 分支 B：续轮（有 tool_result） ──
-if (toolResults.length > 0) {
-const pending = getPendingByToolId(toolResults[0].toolUseId);
-if (!pending) {
- res
-   .status(400)
-   .json(
-     buildErrorResponse(
-       `unknown or expired tool_use_id: ${toolResults[0].toolUseId}（session 已过期或 id 未知）`,
-       'invalid_request_error',
-     ),
-   );
- return;
+if (extraAsNewRequest && pending) {
+  // 丢掉未完成工具轮，后续同 id 纯 tool_result 不得再续进旧 cascade
+  removePending(pending);
 }
 
+// ── 分支 B：续轮（有 tool_result 且 pending 命中，且同条没有新用户文本） ──
+if (toolResults.length > 0 && pending && !extraAsNewRequest) {
 const resultsById = new Map(
  toolResults.map((r) => [r.toolUseId, { content: r.content, isError: r.isError }]),
 );
 // 必须等齐：pending.claudeToolIds 每个都要出现（FC parts 只能整组回放）
 const missing = pending.claudeToolIds.filter((id) => !resultsById.has(id));
 if (missing.length > 0) {
+ const msg = `tool_result 未等齐，缺少: ${missing.join(', ')}（需要: ${pending.claudeToolIds.join(', ')}）`;
+ if (debugEnabled()) captureError(400, msg);
  res
    .status(400)
    .json(
      buildErrorResponse(
-       `tool_result 未等齐，缺少: ${missing.join(', ')}（需要: ${pending.claudeToolIds.join(', ')}）`,
+       msg,
        'invalid_request_error',
      ),
    );
@@ -597,13 +622,38 @@ if (stream) {
 return;
 }
 
-// ── 分支 A：首轮 ──
+if (toolResults.length > 0 && !extraAsNewRequest) {
+  const msg = `unknown or expired tool_use_id: ${toolResults[0].toolUseId}（session 已过期或 id 未知）`;
+  if (debugEnabled()) captureError(400, msg);
+  res
+    .status(400)
+    .json(
+      buildErrorResponse(
+        msg,
+        'invalid_request_error',
+      ),
+    );
+  return;
+}
+
+// ── 分支 A：首轮，或同条带新用户文本（compact / 打断；pending 已丢） ──
 const env = extractEnv(body);
 const systemInstruction = buildSystemInstruction(env, config.systemMode);
 dumpSystemAnatomy(body, env, systemInstruction);
 // 带上历史文本轮：CC 每次回传全量 messages，只取最后一条会丢多轮上下文
 const contents = buildContents(body);
 if (contents.length === 0) {
+if (debugEnabled()) {
+ captureOutbound({
+   model,
+   stepIndex: 0,
+   sessionId: '—',
+   contents,
+   systemInstruction,
+   tools,
+ });
+ captureError(400, 'empty user content');
+}
 res
  .status(400)
  .json(buildErrorResponse('empty user content', 'invalid_request_error'));

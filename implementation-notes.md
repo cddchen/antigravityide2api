@@ -899,10 +899,11 @@ Skill 正文只剩占位句。
 怀疑 CC 重放原始 messages（无 tool_result）导致反复走分支 A。在 `parseToolResults` 后打 `[in]`：
 
 - `n=` 消息条数 + 尾部最多 6 条的 `role(block types)`
-- `tool_result=0 → 分支A`，或 `tool_result=N pending=[hit|miss] → 分支B`
+- `tool_result=0 → 分支A`，或 `tool_result=N pending=[hit|miss] extra=text|none → 分支A|B`
 - 每条 `[tr] id=… err=…` 正文空白折叠后截 160 字
 
-不改变分支语义，只观测。
+2026-09-09 起 `extra` 与真实分支参与分流（见「compact 期间 tool_result+text」）；不再只观测。
+
 
 ## `/logcat` 入站可视化（2026-08-13）
 
@@ -912,6 +913,15 @@ Skill 正文只剩占位句。
 - 每次 `/v1/messages` 拍一帧：全部 `idx:role(kinds)` **默认折叠**，点击展开块正文（tool_use input / tool_result，单块截 12KB）
 - 尾条 `role !== user` 标「截断扫描」——跳过 trailing `role:system` 后再看
 - 不改分支 A/B；无 API key（默认 `127.0.0.1`）。环保留 20 帧。
+
+## `/logcat` 同帧出站 contents（2026-09-10）
+
+排查 `Requests ending with a model turn are not supported` / `Request contains an invalid argument` 时，只看入站不够：要对照即将 `streamGenerate` 的 native `contents`。
+
+- 同一入站帧挂 `outbound[]`：每次上游发送（含 reject-all 续轮）拍一份 `role(kinds)` + systemInstruction 预览
+- `thoughtSignature` 只记 `sig:NB`，不写签名正文；不含 token
+- 本地 400（empty contents / 未等齐 / unknown tool_use_id）和 `sendErr` 上游 400 写到 `frame.error`，导航栏可见
+- 出站 lastRole=`model` 在导航标黄（正是 model-turn 400 的形状）
 
 ## 丢弃对话中途的 role:system（2026-08-13）
 
@@ -1042,4 +1052,43 @@ Token 指纹：
 ### 偏离
 
 - 无 IDE 时回退 `2.1.1` 而不是抛错，避免 T9/CI 在无安装环境崩。有 IDE 时必须读到真值。
+
+## compact 期间 `tool_result+text` 误走分支 B（2026-09-09）
+
+CC `/compact` 不是独立路由。实测在未闭合的 `assistant(tool_use)` 上把工具结果和压缩指令塞进**同一条** user（`tool_result+text`）。旧分类器只要有 `tool_result` 就走分支 B：pending miss → 400 `unknown or expired tool_use_id`；pending hit 则丢掉 compact 正文（`attachTrailingText` 只合并 `Launching skill:`）。
+
+### 决策
+
+1. `extractToolResultSiblingText` 只抽 **tool_result 那一条** 的 sibling 文本（剥 reminder）。Skill 两段 user（下一条才是 Base directory）返回 `''`。
+2. 该文本非空（且不是 `Launching skill:`）→ **一律分支 A**（`buildContents`，新 cascade / step=0）。pending 命中则先 `removePending`。
+3. ~~pending hit + extra 续轮后再追加 user~~：**已撤销**（见下节）。consume-before-await 不变。
+4. 纯 `tool_result` miss 仍 400（T6.10）。不按 `"/compact"` 字面检测。
+5. `[in]` 日志增加 `extra=text|none` 和真实分支，避免 miss+extra 仍写成「→ 分支B」。
+
+### 验证
+
+anthropic 自检：同条 trailing 抽出且不并进 FR；Skill 两段 sibling 为空。T6：未知 id 纯 result 仍 400；未知 id + sibling → 200 分支 A；HIT + sibling → 分支 A 且随后同 id 纯 result 400。
+
+## HIT+extra 续轮导致 autocompact 打转（2026-09-09）
+
+实测：View 截图 `tool_result` 434556B 与 compact 指令同条。HIT+extra 续进旧 cascade 后 prompt 从 ~29k 跳到 327638，模型忽略 TEXT ONLY 继续调工具并注册新 pending。紧接着 miss+extra 分支 A 真正写出摘要（~21k）。compact 后 n=4 的 `tool_result` 仍命中刚注册的 pending，step=20 再次报 usage 328k → CC autocompact → 再 compact → 再 HIT 旧 cascade，循环。
+
+### 决策
+
+同条 sibling 文本一律新 session；命中的 pending 丢掉，让后续纯 `tool_result` 400 而不是续胖 cascade。Skill 两段 sibling 仍为 `''`，不受影响。
+
+## 尾条 user 仅 system-reminder 导致 400（2026-09-10）
+
+CC 在文本回合（`fc=0`）结束后常再发一条几乎全是 `<system-reminder>` 的 user（会话末总结）。`buildContents` 整块剥 reminder 后最后一条 user 变空，contents 以 `role: "model"` 结尾，上游 400 `Requests ending with a model turn are not supported.`
+
+### 决策
+
+1. user 文本：有旁路正文则仍整块丢掉 reminder（避免把 claudeMd 等塞进 USER_REQUEST）。剥完为空才展开内文，去掉标签。
+2. assistant 历史只剥不展开。
+3. `extractToolResultSiblingText` 仍整块剥 reminder；reminder-only sibling 不算 extra，续轮分支不变。
+4. 标签 `<system-reminder>` 不得出现在上游 body。
+
+### 验证
+
+anthropic 自检：mixed reminder + `hello world` 仍只留正文；reminder-only last user 包进 `<USER_REQUEST>`；`assistant(text)` + reminder-only user 的 contents 以 user 结尾。T6 6.15：同上且 mock body 无标签。
 

@@ -562,6 +562,43 @@ async function main() {
     },
   );
 
+  // ── 6.15 尾条 user 仅 system-reminder（会话末总结）──
+  await checkAsync(
+    '6.15 reminder-only last user → USER_REQUEST 含内文且 contents 以 user 结尾',
+    async () => {
+      responseQueue.push(() => ({ status: 200, body: sseText('summary-ok') }));
+      const r = await api('/v1/messages', {
+        method: 'POST',
+        body: msgBody({
+          messages: [
+            { role: 'user', content: 'hello test' },
+            { role: 'assistant', content: 'prior answer' },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: '<system-reminder>\nPlease summarize the conversation.\n</system-reminder>',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      assert.equal(r.status, 200, r.text.slice(0, 300));
+      const hit = lastStreamBody();
+      const contents = hit.body?.request?.contents;
+      assert.ok(Array.isArray(contents) && contents.length > 0, 'contents 非空');
+      assert.equal(contents[contents.length - 1].role, 'user', '不得以 model 结尾');
+      const lastText = contents[contents.length - 1].parts?.[0]?.text || '';
+      assert.ok(
+        lastText.includes('<USER_REQUEST>\nPlease summarize the conversation.\n</USER_REQUEST>'),
+        `USER_REQUEST 须含 reminder 内文，实际 head=${lastText.slice(0, 120)}`,
+      );
+      assertNoCcToolsInBody(hit.raw || hit.body);
+    },
+  );
+
   // ── 6.5 单 FC ──
   await checkAsync('6.5 mock 回 1 个 FC → tool_use 且 name∈{Read,Bash,Write,Edit}', async () => {
     responseQueue.push(() => ({ status: 200, body: sseOneFc() }));
@@ -695,6 +732,55 @@ async function main() {
     assert.equal(receivedBodies.length, before, '未知 id 不得打上游');
   });
 
+  await checkAsync('未知 tool_use_id + sibling text → 分支A', async () => {
+    const before = receivedBodies.length;
+    responseQueue.push(() => ({ status: 200, body: sseText('compact-fallback-ok') }));
+    const r = await api('/v1/messages', {
+      method: 'POST',
+      body: msgBody({
+        messages: [
+          { role: 'user', content: 'hello test' },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'totally-unknown-id-xyz', name: 'Bash', input: {} }],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'totally-unknown-id-xyz',
+                content: 'x',
+              },
+              { type: 'text', text: 'COMPACT_PROMPT_UNIQUE_XYZ' },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(r.status, 200, r.text.slice(0, 400));
+    assert.equal(r.json?.stop_reason, 'end_turn');
+    assert.equal(receivedBodies.length, before + 1, 'miss+extra 应打上游');
+    const hit = lastStreamBody();
+    const contents = hit.body?.request?.contents;
+    assert.ok(Array.isArray(contents) && contents.length > 0, 'contents 非空');
+    const last = contents[contents.length - 1];
+    assert.equal(last.role, 'user');
+    assert.ok(
+      String(last.parts?.[0]?.text || '').includes(
+        '<USER_REQUEST>\nCOMPACT_PROMPT_UNIQUE_XYZ\n</USER_REQUEST>',
+      ),
+      `最后一条应包 compact 文本，实际=${String(last.parts?.[0]?.text || '').slice(0, 200)}`,
+    );
+    assert.ok(
+      !JSON.stringify(contents).includes('functionCall'),
+      '分支A 不得回放 FC',
+    );
+    assert.ok(String(hit.body?.requestId || '').endsWith('/0'), `新 session step=0，requestId=${hit.body?.requestId}`);
+    assert.equal(hit.body.request.tools.length, 14);
+    assertNoCcToolsInBody(hit.raw || hit.body);
+  });
+
   // ── 6.7 / 6.8 续轮带齐 2 个 tool_result ──
   await checkAsync(
     '6.7/6.8 续轮 2 tool_result：contents +2 条 model、FC 合并+sig 原样、FR output 字符串 Created At:',
@@ -783,6 +869,103 @@ async function main() {
       // 续轮 body 仍 14 tools、无 CC 泄漏
       assert.equal(hit.body.request.tools.length, 14);
       assertNoCcToolsInBody(hit.raw || hit.body);
+    },
+  );
+
+  await checkAsync(
+    'pending HIT + sibling text → 分支A 并丢掉 pending',
+    async () => {
+      responseQueue.push(() => ({ status: 200, body: sseOneFc() }));
+      const first = await api('/v1/messages', { method: 'POST', body: msgBody() });
+      assert.equal(first.status, 200, first.text.slice(0, 400));
+      assert.equal(first.json?.stop_reason, 'tool_use');
+      const before = receivedBodies.length;
+
+      responseQueue.push(() => ({ status: 200, body: sseText('compact-hit-ok') }));
+      const r = await api('/v1/messages', {
+        method: 'POST',
+        body: msgBody({
+          messages: [
+            { role: 'user', content: 'hello test' },
+            {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'fc1_list',
+                  name: 'Bash',
+                  input: { command: 'true' },
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'fc1_list',
+                  content: '{"name":"a","sizeBytes":"1"}',
+                },
+                { type: 'text', text: 'COMPACT_HIT_UNIQUE_XYZ' },
+              ],
+            },
+          ],
+        }),
+      });
+      assert.equal(r.status, 200, r.text.slice(0, 400));
+      assert.equal(r.json?.stop_reason, 'end_turn');
+      assert.equal(receivedBodies.length, before + 1, 'HIT+extra 应打上游一次');
+      const hit = lastStreamBody();
+      const contents = hit.body?.request?.contents;
+      assert.ok(Array.isArray(contents) && contents.length > 0, 'contents 非空');
+      const last = contents[contents.length - 1];
+      assert.equal(last.role, 'user');
+      assert.ok(
+        String(last.parts?.[0]?.text || '').includes(
+          '<USER_REQUEST>\nCOMPACT_HIT_UNIQUE_XYZ\n</USER_REQUEST>',
+        ),
+        `最后一条应包 compact 文本，实际=${String(last.parts?.[0]?.text || '').slice(0, 200)}`,
+      );
+      assert.ok(
+        !JSON.stringify(contents).includes('functionCall'),
+        'HIT+extra 不得回放 FC（会续进旧 cascade）',
+      );
+      assert.ok(String(hit.body?.requestId || '').endsWith('/0'), `新 session step=0，requestId=${hit.body?.requestId}`);
+      assert.equal(hit.body.request.tools.length, 14);
+      assertNoCcToolsInBody(hit.raw || hit.body);
+
+      const afterA = receivedBodies.length;
+      const leftover = await api('/v1/messages', {
+        method: 'POST',
+        body: msgBody({
+          messages: [
+            { role: 'user', content: 'hello test' },
+            {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'fc1_list',
+                  name: 'Bash',
+                  input: { command: 'true' },
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'fc1_list',
+                  content: '{"name":"a","sizeBytes":"1"}',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      assert.equal(leftover.status, 400, `丢掉 pending 后同 id 纯 result 应 400，实际 ${leftover.status} ${leftover.text.slice(0, 300)}`);
+      assert.equal(receivedBodies.length, afterA, '丢掉的 pending 不得再打上游');
     },
   );
 

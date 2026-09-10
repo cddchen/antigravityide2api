@@ -111,7 +111,7 @@ node dist/cli.js stop     # Stop daemon
 ```bash
 PORT=4000 DUMP_SYSTEM=1 DEBUG=1 node dist/server.js
 ```
-> Once started, visit `http://127.0.0.1:4000/logcat` in your browser to inspect conversation streams and tool calls in real time.
+> Once started, visit `http://127.0.0.1:4000/logcat` to inspect inbound `/v1/messages` and outbound Antigravity `contents` in real time (same frame; no tokens).
 
 ### 5. Run Tests
 

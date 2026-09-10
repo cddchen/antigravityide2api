@@ -111,7 +111,7 @@ node dist/cli.js stop     # 停止后台服务
 ```bash
 PORT=4000 DUMP_SYSTEM=1 DEBUG=1 node dist/server.js
 ```
-> 服务启动后，可以在浏览器访问 `http://127.0.0.1:4000/logcat` 实时查看对话流和工具调用上下文。
+> 服务启动后，浏览器打开 `http://127.0.0.1:4000/logcat` 可实时查看入站 `/v1/messages` 与出站 Antigravity `contents`（同一帧；不含 token）。
 
 ### 5. 运行测试套件
 

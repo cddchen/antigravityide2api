@@ -37,7 +37,7 @@
 
 ## 生命周期、状态与并发不变量
 
-- 没有当前尾随 `tool_result` 的请求必须创建新的 `sessionId`、`cascadeUuid`、`trajectoryUuid` 和 step 0。不得从 Claude message ID 推断上游连续性。
+- 没有当前尾随 `tool_result` 的请求必须创建新的 `sessionId`、`cascadeUuid`、`trajectoryUuid` 和 step 0。不得从 Claude message ID 推断上游连续性。同条 user 上 `tool_result` 旁的非 reminder 文本是新的用户请求（如 `/compact`），不是 compact 字符串特殊分支：无论 pending 是否命中都走分支 A，命中则先 `removePending` 丢掉未完成工具轮。禁止 HIT+extra 续轮——会把大 FR（截图等）再送上游，usage 爆掉后 autocompact 打转。纯 `tool_result` miss 仍 400。Skill 的 `Launching skill:` 合并仍只走 `attachTrailingText`，不得把 skill 正文再追加成一轮 user。尾条 user 若只有 `<system-reminder>`，展开内文作为 `<USER_REQUEST>`，不得丢掉整块导致 contents 以 model 结尾；sibling extra 检测仍整块剥 reminder。
 - 按原顺序保留每个上游 FC part 及其兄弟字段，尤其是 `thoughtSignature`。同一上游 turn 的全部 FC parts 必须放入一个 `role: "model"` content；匹配的 FR parts 放入紧随其后的另一个 `role: "model"` content。
 - 不得重建、拆分、丢弃或伪造缺失的 `thoughtSignature`。签名丢失应视为上游 trajectory 不可恢复。
 - 并行的可桥接 call 只有在全部记录的 Claude tool ID 都有结果后才能 resume。混合拒绝 call 仍要按序生成原生错误 FR。纯拒绝循环必须有上限。

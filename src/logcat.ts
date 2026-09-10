@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════
-//  DEBUG=1 时的入站会话可视化：GET /logcat
-//  只观测 CC → 本服务的 messages，不改分支语义
+//  DEBUG=1 时的入站/出站可视化：GET /logcat
+//  观测 CC → 本服务 messages，以及本服务 → Antigravity contents
+//  不改分支语义；不含 token
 // ═══════════════════════════════════════════════
 
 import assert from 'assert';
@@ -9,7 +10,10 @@ import { parseToolResults } from './anthropic';
 import type {
 AnthropicContentBlock,
 AnthropicMessagesRequest,
+NativeContent,
+NativePart,
 ParsedToolResult,
+ToolEntry,
 } from './types';
 
 const MAX_FRAMES = 20;
@@ -37,6 +41,21 @@ bytes: number;
 blocks: LogcatBlock[];
 }
 
+export interface LogcatOutbound {
+stepIndex: number;
+model: string;
+sessionId: string;
+n: number;
+lastRole: string;
+lastKinds: string;
+systemBytes: number;
+systemPreview: string;
+systemText: string;
+systemTruncated: boolean;
+toolCount: number;
+contents: LogcatMessage[];
+}
+
 export interface LogcatFrame {
 id: number;
 ts: number;
@@ -51,6 +70,9 @@ last: string;
 tailRole: string;
 tailBlocksParse: boolean;
 messages: LogcatMessage[];
+/** 本入站对应的每一次上游发送（含 reject-all 续轮） */
+outbound: LogcatOutbound[];
+error?: { status: number; message: string };
 }
 
 let seq = 0;
@@ -192,6 +214,7 @@ meta: {
   stream: boolean;
   toolResults: ParsedToolResult[];
   pendingHits: string[];
+  branch?: 'A' | 'B';
 },
 ): LogcatFrame {
 const raw = (body.messages ?? []) as Array<{
@@ -214,16 +237,22 @@ const frame: LogcatFrame = {
   model: meta.model,
   stream: meta.stream,
   n: messages.length,
-  branch: toolResultCount > 0 ? 'B' : 'A',
+  branch: meta.branch ?? (toolResultCount > 0 ? 'B' : 'A'),
   toolResultCount,
   pending: meta.pendingHits.join(',') || '—',
   last: lastSummary(messages),
   tailRole,
   tailBlocksParse: parseTailRole !== '' && parseTailRole !== 'user',
   messages,
+  outbound: [],
 };
 frames.push(frame);
 while (frames.length > MAX_FRAMES) frames.shift();
+emit(frame);
+return frame;
+}
+
+function emit(frame: LogcatFrame): void {
 for (const cb of listeners) {
   try {
     cb(frame);
@@ -231,7 +260,104 @@ for (const cb of listeners) {
     /* SSE 客户端断开时忽略 */
   }
 }
+}
+
+function latestFrame(): LogcatFrame | undefined {
+return frames.length ? frames[frames.length - 1] : undefined;
+}
+
+function snapshotNativePart(p: NativePart): LogcatBlock {
+const sig = p.thoughtSignature
+  ? `sig:${Buffer.byteLength(p.thoughtSignature, 'utf8')}B`
+  : '';
+if (p.functionCall) {
+  const clipped = clip(stringifyUnknown(p.functionCall.args ?? {}));
+  return {
+    type: 'functionCall',
+    id: p.functionCall.id,
+    name: p.functionCall.name,
+    text: sig ? `${clipped.text}\n[${sig}]` : clipped.text,
+    bytes: clipped.bytes,
+    truncated: clipped.truncated,
+  };
+}
+if (p.functionResponse) {
+  const clipped = clip(p.functionResponse.response?.output ?? '');
+  return {
+    type: 'functionResponse',
+    id: p.functionResponse.id,
+    name: p.functionResponse.name,
+    text: clipped.text,
+    bytes: clipped.bytes,
+    truncated: clipped.truncated,
+  };
+}
+const raw = p.text ?? '';
+const clipped = clip(raw);
+return {
+  type: p.thought ? 'thought' : raw ? 'text' : sig ? 'thoughtSignature' : 'empty',
+  text: raw ? clipped.text : sig,
+  bytes: raw ? clipped.bytes : 0,
+  truncated: clipped.truncated,
+};
+}
+
+function snapshotNativeContent(idx: number, c: NativeContent): LogcatMessage {
+const parts = c.parts ?? [];
+const blocks = parts.map(snapshotNativePart);
+const kinds = blocks.map((b) => b.type).join('+') || 'empty';
+const previews = blocks.map((b) => {
+  if (b.type === 'functionCall') return `${b.name || '?'} ${omitText(b.text, 80)}`;
+  if (b.type === 'functionResponse') return `${b.name || '?'} ${omitText(b.text, 80)}`;
+  return omitText(b.text, 80);
+});
+return {
+  idx,
+  role: c.role || '?',
+  kinds,
+  preview: omitText(previews.join(' | ')),
+  bytes: blocks.reduce((n, b) => n + b.bytes, 0),
+  blocks,
+};
+}
+
+/** 把即将发往上游的 contents 挂到当前入站帧；无 token。 */
+export function captureOutbound(opts: {
+  model: string;
+  stepIndex: number;
+  sessionId: string;
+  contents: NativeContent[];
+  systemInstruction: string;
+  tools: ToolEntry[];
+}): LogcatFrame | undefined {
+const frame = latestFrame();
+if (!frame) return undefined;
+const contents = (opts.contents ?? []).map((c, i) => snapshotNativeContent(i, c));
+const last = contents.length ? contents[contents.length - 1] : undefined;
+const sys = clip(opts.systemInstruction || '');
+frame.outbound.push({
+  stepIndex: opts.stepIndex,
+  model: opts.model,
+  sessionId: opts.sessionId,
+  n: contents.length,
+  lastRole: last?.role || '',
+  lastKinds: last?.kinds || '',
+  systemBytes: sys.bytes,
+  systemPreview: omitText(opts.systemInstruction || ''),
+  systemText: sys.text,
+  systemTruncated: sys.truncated,
+  toolCount: opts.tools.length,
+  contents,
+});
+emit(frame);
 return frame;
+}
+
+export function captureError(status: number, message: string): void {
+const frame = latestFrame();
+if (!frame) return;
+frame.error = { status, message: omitText(message, 400) };
+emit(frame);
 }
 
 const PAGE = `<!DOCTYPE html>
@@ -270,6 +396,8 @@ summary .idx { color:var(--dim); min-width:3ch; }
 summary .role.user { color:var(--user); }
 summary .role.assistant { color:var(--asst); }
 summary .role.system { color:var(--sys); }
+summary .role.model { color:var(--a); }
+h2 { font-size:12px; color:var(--dim); margin:16px 0 8px; letter-spacing:.06em; text-transform:uppercase; }
 summary .kinds { color:var(--dim); }
 summary .preview { color:var(--tx); opacity:.85; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 .body { padding:0 10px 10px; border-top:1px solid var(--line); }
@@ -306,39 +434,76 @@ function renderNav() {
 $frames.innerHTML = frames.map(f => {
   const on = selected === f.id ? ' on' : '';
   const warn = f.tailBlocksParse ? '<div class="warn">tail=' + esc(f.tailRole) + ' → 截断扫描</div>' : '';
+  const lastOut = (f.outbound && f.outbound.length) ? f.outbound[f.outbound.length-1] : null;
+  const outWarn = lastOut && lastOut.lastRole === 'model' ? ' warn' : '';
+  const outLine = lastOut
+    ? '<div class="t' + outWarn + '">out n=' + lastOut.n + ' last=' + esc(lastOut.lastRole) + '(' + esc(lastOut.lastKinds) + ') step=' + lastOut.stepIndex + '</div>'
+    : '<div class="t">out —</div>';
+  const err = f.error ? '<div class="warn">err ' + esc(String(f.error.status)) + ' ' + esc(f.error.message) + '</div>' : '';
   return '<div class="frame' + on + '" data-id="' + f.id + '">'
     + '<div><span class="badge ' + f.branch + '">分支' + f.branch + '</span> #' + f.id
     + ' <span class="t">' + time(f.ts) + '</span></div>'
-    + '<div class="t">n=' + f.n + ' tool_result=' + f.toolResultCount + ' pending=' + esc(f.pending) + '</div>'
+    + '<div class="t">in n=' + f.n + ' tool_result=' + f.toolResultCount + ' pending=' + esc(f.pending) + '</div>'
+    + outLine
     + warn
+    + err
     + '</div>';
 }).reverse().join('') || '<div class="empty">无帧</div>';
 }
 
-function renderMsgs() {
- const f = frames.find(x => x.id === selected);
-if (!f) { $msgs.innerHTML = '<div class="empty">等待 /v1/messages 入站</div>'; return; }
-const head = '<p class="meta">model=' + esc(f.model) + ' stream=' + f.stream
-  + ' last=[' + esc(f.last) + ']</p>';
-const rows = f.messages.map(m => {
-  const cls = m.role === 'system' ? ' sys' : (f.tailBlocksParse && m.idx === f.n - 1 ? ' block' : '');
-  const blocks = m.blocks.map(b => {
-    const h = b.type === 'tool_use'
+function renderBlocks(blocks) {
+  return (blocks || []).map(b => {
+    const h = b.type === 'tool_use' || b.type === 'functionCall'
       ? b.type + ' name=' + (b.name || '') + ' id=' + (b.id || '')
       : b.type === 'tool_result'
         ? b.type + ' id=' + (b.toolUseId || '') + ' err=' + b.isError
-        : b.type + ' ' + b.bytes + 'B';
+        : b.type === 'functionResponse'
+          ? b.type + ' name=' + (b.name || '') + ' id=' + (b.id || '')
+          : b.type + ' ' + b.bytes + 'B';
     return '<div class="blk"><div class="h">' + esc(h) + (b.truncated ? ' truncated' : '')
-      + '</div><pre>' + esc(b.text) + '</pre></div>';
+      + '</div><pre>' + esc(b.text || '') + '</pre></div>';
   }).join('');
-  return '<details class="' + cls.trim() + '"><summary>'
-    + '<span class="idx">' + m.idx + '</span>'
-    + '<span class="role ' + esc(m.role) + '">' + esc(m.role) + '</span>'
-    + '<span class="kinds">(' + esc(m.kinds) + ')</span>'
-    + '<span class="preview">' + esc(m.preview) + '</span>'
-    + '</summary><div class="body">' + (blocks || '<div class="empty">empty</div>') + '</div></details>';
-}).join('');
-$msgs.innerHTML = head + rows;
+}
+function renderMessageList(f, messages, outbound) {
+  return (messages || []).map(m => {
+    const cls = m.role === 'system' ? ' sys'
+      : (m.role === 'model' || (f.tailBlocksParse && m.idx === f.n - 1) ? ' block' : '');
+    const blocks = renderBlocks(m.blocks);
+    return '<details class="' + cls.trim() + '"><summary>'
+      + '<span class="idx">' + m.idx + '</span>'
+      + '<span class="role ' + esc(m.role) + '">' + esc(m.role) + '</span>'
+      + '<span class="kinds">(' + esc(m.kinds) + ')</span>'
+      + '<span class="preview">' + esc(m.preview) + '</span>'
+      + '</summary><div class="body">' + (blocks || '<div class="empty">empty</div>') + '</div></details>';
+  }).join('');
+}
+function renderMsgs() {
+ const f = frames.find(x => x.id === selected);
+if (!f) { $msgs.innerHTML = '<div class="empty">等待 /v1/messages 入站</div>'; return; }
+const err = f.error ? '<p class="warn">error ' + esc(String(f.error.status)) + ' ' + esc(f.error.message) + '</p>' : '';
+const head = '<p class="meta">model=' + esc(f.model) + ' stream=' + f.stream
+  + ' last=[' + esc(f.last) + ']</p>' + err;
+const inbound = '<h2>入站 /v1/messages</h2>' + (renderMessageList(f, f.messages) || '<div class="empty">empty</div>');
+const outs = f.outbound || [];
+let outbound = '<h2>出站 Antigravity contents</h2>';
+if (!outs.length) {
+  outbound += '<div class="empty">尚未发往上游（本地 400 或等待中）</div>';
+} else {
+  outbound += outs.map((o, i) => {
+    const warn = o.lastRole === 'model' ? ' class="warn"' : '';
+    const meta = '<p class="meta"' + warn + '>#' + (i+1)
+      + ' step=' + o.stepIndex + ' n=' + o.n
+      + ' last=' + esc(o.lastRole) + '(' + esc(o.lastKinds) + ')'
+      + ' tools=' + o.toolCount + ' session=' + esc(o.sessionId) + '</p>';
+    const sys = '<details class="sys"><summary>'
+      + '<span class="role system">systemInstruction</span>'
+      + '<span class="kinds">(' + o.systemBytes + 'B)</span>'
+      + '<span class="preview">' + esc(o.systemPreview) + '</span>'
+      + '</summary><div class="body"><pre>' + esc(o.systemText || o.systemPreview) + '</pre></div></details>';
+    return meta + sys + renderMessageList(f, o.contents);
+  }).join('');
+}
+$msgs.innerHTML = head + outbound + inbound;
 }
 
 $frames.addEventListener('click', e => {
@@ -443,6 +608,35 @@ assert.strictEqual(f.messages[1].kinds, 'tool_use');
 assert.strictEqual(f.messages[2].kinds, 'tool_result');
 assert.ok(f.messages[1].preview.includes('Bash'));
 assert.ok(PAGE.includes('follow latest'));
+assert.ok(PAGE.includes('出站 Antigravity contents'));
+assert.deepStrictEqual(f.outbound, []);
+const out = captureOutbound({
+  model: 'gemini-3.6-flash-high',
+  stepIndex: 0,
+  sessionId: '-1',
+  systemInstruction: 'sys-hello',
+  tools: [],
+  contents: [
+    { role: 'user', parts: [{ text: 'hi' }] },
+    {
+      role: 'model',
+      parts: [
+        {
+          functionCall: { id: 'fc1', name: 'list_dir', args: { DirectoryPath: '/tmp' } },
+          thoughtSignature: 'sig-bytes',
+        },
+      ],
+    },
+  ],
+});
+assert.ok(out);
+assert.strictEqual(out!.outbound.length, 1);
+assert.strictEqual(out!.outbound[0].lastRole, 'model');
+assert.strictEqual(out!.outbound[0].contents[1].kinds, 'functionCall');
+assert.ok(out!.outbound[0].contents[1].blocks[0].text.includes('sig:9B'));
+assert.ok(!JSON.stringify(out).includes('ya29'));
+captureError(400, 'Requests ending with a model turn are not supported.');
+assert.strictEqual(getSnapshot().frames[0].error?.status, 400);
 assert.strictEqual(getSnapshot().frames.length, 1);
 console.log('logcat self-test ok');
 }

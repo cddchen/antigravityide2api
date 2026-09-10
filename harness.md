@@ -81,7 +81,7 @@ Claude 客户端
 | `src/auth.ts`、`src/extract-token.ts` | Token 读写、OAuth refresh、project 发现、只读 IDE 提取 | HTTP 路由和对话状态。 |
 | `src/tool-bridge.ts` | 6 个已支持映射、结果整形、shell 引用、Write/Edit 路径拒绝 | Pending 生命周期或实际工具执行。 |
 | `src/pending-session.ts` | 内存 tool-ID 索引、过期、成组 FC/FR 追加 | 持久化 restore。 |
-| `src/logcat.ts` | `DEBUG` 下的有界内存调试视图 | 鉴权或持久化日志。 |
+| `src/logcat.ts` | `DEBUG` 下的有界内存调试视图：入站 `/v1/messages` 与出站 Antigravity `contents`（同帧，含本地/上游 400） | 鉴权或持久化日志；不含 token；`thoughtSignature` 只记长度。 |
 
 配置在模块加载时求值；进程启动后修改环境变量不会重新配置服务。
 
@@ -99,9 +99,9 @@ Claude 客户端
 
 ### 新请求
 
-1. `parseToolResults` 扫描末尾连续 user 段。没有当前 tool result 时，创建新的上游 session/cascade/trajectory 身份。
+1. `parseToolResults` 扫描末尾连续 user 段。没有当前 tool result 时，创建新的上游 session/cascade/trajectory 身份。同条 user 上 `tool_result` 旁边的非 reminder 文本由 `extractToolResultSiblingText` 抽出：无论 pending 是否命中都落到分支 A（新 session）；命中则先丢掉 pending，避免后续纯 `tool_result` 续进旧 cascade。纯 `tool_result` 且 pending miss 仍 400。`/compact` 只是这种 `tool_result+text` 形状的一个来源，不按字面检测。不得 HIT+extra 续轮：会把截图等大 FR 再送上游，返回的 usage 会让 CC autocompact 打转。
 2. `extractEnv` 只提取选定的 workspace/platform/git/rule/skill 信息；`buildSystemInstruction` 使用入库 capture sections 重建 `full`、`trimmed` 或 `short` 文本。
-3. `buildContents` 转发文本历史，把 `assistant` 映射为上游 `model`，移除 `<system-reminder>`，丢弃中途 `system` 和历史工具块，只把最后一条 user 文本包装为 `<USER_REQUEST>`。
+3. `buildContents` 转发文本历史，把 `assistant` 映射为上游 `model`。历史与旁路正文整块丢掉 `<system-reminder>`；user 轮剥完若空则改用 reminder 内文（会话末总结），避免 contents 以 `model` 结尾被上游 400。标签本身不上游。丢弃中途 `system` 和历史工具块，只把最后一条 user 文本包装为 `<USER_REQUEST>`。`extractToolResultSiblingText` 仍整块剥 reminder，reminder-only 不算 extra。
 4. Claude 入站工具目录被丢弃。加载并校验 14 项原生 capture 后，`assertSafeToSend` 在发送下游 SSE header 前拒绝非原生目录或 Claude 专属泄漏文本。
 5. `withAuth` 解析凭证/project，`streamGenerate` 发送 IDE 形态请求。文本要么累积为 JSON，要么由 `AnthropicSseWriter` 增量转发。
 
@@ -111,7 +111,7 @@ Claude 客户端
 - `Write`/`Edit` 超出 `WORKSPACE_ROOT` 时被拒；未配置时使用请求提取的 cwd。Read、list、grep 和 command 没有相同边界。
 - 全部 call 被拒时，本地追加 error responses 后重试上游，连续纯拒绝最多 3 次。
 - 至少一个 call 可桥接时，保存完整原始 FC 组；混合场景的拒绝 call 仍留在组内，并在 resume 时生成 response。
-- Resume 必须带齐所有 bridged tool ID。不完整时返回 400 且不访问上游。FC parts 一起追加到一个 `role: "model"` content，FR parts 按 FC 顺序放在随后另一个 `role: "model"` content。
+- Resume 必须带齐所有 bridged tool ID。不完整时返回 400 且不访问上游。FC parts 一起追加到一个 `role: "model"` content，FR parts 按 FC 顺序放在随后另一个 `role: "model"` content。同条 sibling 用户文本不走 resume，改开新 session；`Launching skill:` 仍只由 `attachTrailingText` 并进 FR。
 - 访问续轮上游前删除 pending；若上游失败，当前进程无法用相同 tool ID 重试。
 - 最终文本结束 turn；再次出现 function call 时，沿用上游身份并递增 step，建立新 pending。
 

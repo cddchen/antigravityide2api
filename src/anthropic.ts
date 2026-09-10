@@ -88,36 +88,40 @@ return hits.map((h) =>
 );
 }
 
+/**
+ * 尾部连续 user 里第一条含 tool_result 的 message。
+ * 跳过 mid-conversation role:system；碰到 assistant 停。
+ */
+function findTrailingToolResultHit(
+  messages: NonNullable<AnthropicMessagesRequest['messages']>,
+): { index: number; blocks: AnthropicContentBlock[] } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if ((msg.role as string) === 'system') continue;
+    if (msg.role !== 'user') break;
+    if (typeof msg.content === 'string') continue;
+    const found = msg.content.filter((b) => b.type === 'tool_result' && b.tool_use_id);
+    if (found.length) return { index: i, blocks: found };
+  }
+  return null;
+}
+
 /** 提取本轮所有 tool_result；无则返回空数组（= 首轮） */
 export function parseToolResults(body: AnthropicMessagesRequest): ParsedToolResult[] {
-const messages = body.messages;
-if (!messages?.length) return [];
+  const messages = body.messages;
+  if (!messages?.length) return [];
 
- // 并行 tool_use 时 CC 把全部 tool_result 放在同一条 user message 里（实测）。
- // 从尾部扫连续 user 消息：tool_result 可能被 attachment 挤到倒数第二。
- // 跳过 mid-conversation role:system（不进上游）；碰到 assistant 才停。
- // 本段内无 tool_result → 首轮/新提问。
- let hitIndex = -1;
- let hits: AnthropicContentBlock[] = [];
- for (let i = messages.length - 1; i >= 0; i--) {
-   const msg = messages[i];
-   if ((msg.role as string) === 'system') continue;
-   if (msg.role !== 'user') break;
- if (typeof msg.content === 'string') continue;
- const found = msg.content.filter((b) => b.type === 'tool_result' && b.tool_use_id);
- if (found.length) {
-   hits = found;
-   hitIndex = i;
-   break;
- }
-}
-if (!hits.length) return [];
-const parsed = hits.map((b) => ({
- toolUseId: b.tool_use_id!,
- content: toolResultToString(b.content),
- isError: b.is_error === true,
-}));
-return attachTrailingText(parsed, messages, hitIndex);
+  // 并行 tool_use 时 CC 把全部 tool_result 放在同一条 user message 里（实测）。
+  // 从尾部扫连续 user 消息：tool_result 可能被 attachment 挤到倒数第二。
+  // 本段内无 tool_result → 首轮/新提问。
+  const hit = findTrailingToolResultHit(messages);
+  if (!hit) return [];
+  const parsed = hit.blocks.map((b) => ({
+    toolUseId: b.tool_use_id!,
+    content: toolResultToString(b.content),
+    isError: b.is_error === true,
+  }));
+  return attachTrailingText(parsed, messages, hit.index);
 }
 
 /** 本地时间带偏移：2026-08-08T17:01:03+08:00（不加依赖） */
@@ -139,32 +143,22 @@ return `${y}-${mo}-${day}T${h}:${mi}:${s}${sign}${oh}:${om}`;
 
 /**
 * 把 CC 的 messages 转成上游 user content；
-* 只取最后一条 user 纯文本，剥 <system-reminder>，包 <USER_REQUEST>
+* 只取最后一条 user 纯文本。有旁路正文时整块丢掉 <system-reminder>；
+* 若剥完为空（会话末尾总结等）则改用 reminder 内文。包 <USER_REQUEST>。
 */
 export function buildUserContent(body: AnthropicMessagesRequest): NativeContent | null {
 const messages = body.messages;
 if (!messages?.length) return null;
 
-// 最后一条 role:'user' 的纯文本块
 let raw = '';
 for (let i = messages.length - 1; i >= 0; i--) {
  const msg = messages[i];
  if (msg.role !== 'user') continue;
- if (typeof msg.content === 'string') {
-   raw = msg.content;
- } else {
-   raw = msg.content
-     .filter((b) => b.type === 'text')
-     .map((b) => b.text ?? '')
-     .join('\n');
- }
+ raw = contentRawText(msg.content);
  break;
 }
 
-// 剥掉所有 <system-reminder>…</system-reminder>
-const text = wrapUserRequest(
- raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim(),
-);
+const text = wrapUserRequest(userPlainTextFromRaw(raw));
 if (!text) return null;
 return { role: 'user', parts: [{ text }] };
 }
@@ -194,7 +188,11 @@ for (let i = 0; i < messages.length; i++) {
  // 上游 contents 只认 user/model；mid-conversation 的 role:'system' 只能丢
  if (msg.role !== 'user' && msg.role !== 'assistant') continue;
 
- const text = plainText(msg.content);
+ const raw = contentRawText(msg.content);
+ // user：有旁路正文则丢掉 reminder 整块；剥完为空才用内文（末尾总结）。
+ // assistant 只剥不展开，避免把 reminder 噪声写进 model 轮。
+ const text =
+   msg.role === 'user' ? userPlainTextFromRaw(raw) : stripReminderBlocks(raw);
  if (i === lastUserIdx) {
    const wrapped = wrapUserRequest(text);
    if (wrapped) contents.push({ role: 'user', parts: [{ text: wrapped }] });
@@ -206,25 +204,61 @@ for (let i = 0; i < messages.length; i++) {
 return contents;
 }
 
-function plainText(content: string | AnthropicContentBlock[] | undefined): string {
-const raw =
- typeof content === 'string'
-   ? content
-   : (content ?? [])
-       .filter((b) => b.type === 'text')
-       .map((b) => b.text ?? '')
-       .join('\n');
+function contentRawText(content: string | AnthropicContentBlock[] | undefined): string {
+return typeof content === 'string'
+ ? content
+ : (content ?? [])
+     .filter((b) => b.type === 'text')
+     .map((b) => b.text ?? '')
+     .join('\n');
+}
+
+/** 整块丢掉 <system-reminder>。sibling extra / compact 检测必须走这条，reminder-only 才不算新请求。 */
+function stripReminderBlocks(raw: string): string {
 return raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
 }
 
+/** 去掉标签、保留内文。仅当剥完为空时作为 user 正文，避免 contents 以 model 结尾。 */
+function unwrapReminderBlocks(raw: string): string {
+return raw.replace(/<system-reminder>([\s\S]*?)<\/system-reminder>/g, '$1').trim();
+}
+
+function userPlainTextFromRaw(raw: string): string {
+const stripped = stripReminderBlocks(raw);
+return stripped || unwrapReminderBlocks(raw);
+}
+
+function plainText(content: string | AnthropicContentBlock[] | undefined): string {
+return stripReminderBlocks(contentRawText(content));
+}
+
 function wrapUserRequest(stripped: string): string {
-if (!stripped) return '';
-return (
- `<USER_REQUEST>\n${stripped}\n</USER_REQUEST>\n` +
- `<ADDITIONAL_METADATA>\n` +
- `The current local time is: ${formatLocalIso()}.\n` +
- `</ADDITIONAL_METADATA>`
-);
+  if (!stripped) return '';
+  return (
+    `<USER_REQUEST>\n${stripped}\n</USER_REQUEST>\n` +
+    `<ADDITIONAL_METADATA>\n` +
+    `The current local time is: ${formatLocalIso()}.\n` +
+    `</ADDITIONAL_METADATA>`
+  );
+}
+
+/**
+ * 含 tool_result 的那条 user message 上的同条纯文本（剥 reminder）。
+ * compact 形状是一条 `tool_result+text`；Skill 正文在下一条 user，这里返回 ''。
+ */
+export function extractToolResultSiblingText(body: AnthropicMessagesRequest): string {
+  const messages = body.messages;
+  if (!messages?.length) return '';
+  const hit = findTrailingToolResultHit(messages);
+  if (!hit) return '';
+  return plainText(messages[hit.index].content);
+}
+
+/** 把已剥 reminder 的用户文本包成上游 user content；空串 → null */
+export function buildWrappedUserContent(stripped: string): NativeContent | null {
+  const text = wrapUserRequest(stripped);
+  if (!text) return null;
+  return { role: 'user', parts: [{ text }] };
 }
 
 // ---------- 响应侧：非流式 ----------
@@ -457,7 +491,7 @@ if (require.main === module) {
  assert.ok(!t.includes('Z\n'), 'must not use Z suffix');
 }
 
-// 剥完为空 → null
+// 剥完为空 → 用 reminder 内文，避免 contents 以 model 结尾
 {
  const body: AnthropicMessagesRequest = {
    messages: [
@@ -467,7 +501,11 @@ if (require.main === module) {
      },
    ],
  };
- assert.strictEqual(buildUserContent(body), null);
+ const uc = buildUserContent(body);
+ assert.ok(uc, 'reminder-only last user 须展开内文');
+ const t = uc!.parts[0].text!;
+ assert.ok(!t.includes('<system-reminder'), '标签不得上传');
+ assert.ok(t.includes('<USER_REQUEST>\nonly\n</USER_REQUEST>'), '内文须进 USER_REQUEST');
 }
 
 // 2. parseToolResults 从多块 content 抽出全部；普通 trailing 不合并
@@ -493,6 +531,11 @@ if (require.main === module) {
  assert.strictEqual(results[1].toolUseId, 'b');
  assert.strictEqual(results[1].content, 'file-b');
  assert.strictEqual(results[1].isError, true);
+ assert.strictEqual(
+   extractToolResultSiblingText(body),
+   'trailing',
+   '同条 text 须抽出，且不得并进 tool_result content',
+ );
 }
 
 // 首轮无 tool_result → []
@@ -567,6 +610,80 @@ if (require.main === module) {
    results[0].content,
    'Launching skill: demo\n\nBase directory for this skill: /x\n# Demo',
  );
+ assert.strictEqual(
+   extractToolResultSiblingText(body),
+   '',
+   'Skill 正文在下一条 user，同条 sibling 必须为空',
+ );
+}
+
+{
+  assert.strictEqual(
+    extractToolResultSiblingText({ messages: [{ role: 'user', content: 'hi' }] }),
+    '',
+  );
+  assert.strictEqual(
+    extractToolResultSiblingText({
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }],
+        },
+      ],
+    }),
+    '',
+  );
+}
+
+{
+  const body: AnthropicMessagesRequest = {
+    messages: [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'c', name: 'Bash', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'c', content: 'ok' },
+          { type: 'text', text: '<system-reminder>only</system-reminder>' },
+        ],
+      },
+    ],
+  };
+  assert.strictEqual(extractToolResultSiblingText(body), '');
+}
+
+{
+  const body: AnthropicMessagesRequest = {
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'c', content: 'ok' },
+          {
+            type: 'text',
+            text: '<system-reminder>meta</system-reminder>\nhello compact',
+          },
+        ],
+      },
+      {
+        role: 'system' as 'user',
+        content: 'trailing system must not hide sibling text',
+      },
+    ],
+  };
+  assert.strictEqual(extractToolResultSiblingText(body), 'hello compact');
+}
+
+{
+  const wrapped = buildWrappedUserContent('hello compact');
+  assert.ok(wrapped);
+  assert.strictEqual(wrapped.role, 'user');
+  assert.ok(
+    wrapped.parts[0].text!.includes('<USER_REQUEST>\nhello compact\n</USER_REQUEST>'),
+  );
+  assert.strictEqual(buildWrappedUserContent(''), null);
 }
 
 // 2b. buildContents：历史文本保留、role 映射、tool 块与 role:'system' 丢弃
@@ -596,6 +713,38 @@ if (require.main === module) {
  const all = JSON.stringify(cs);
  assert.ok(!all.includes('mid-conversation system'), 'role:system 必须丢弃');
  assert.ok(!all.includes('tool_use'), 'tool 块不得进 contents（无 thoughtSignature 会 400）');
+}
+
+// 尾条 user 只有 reminder（CC 会话末总结）：展开内文，contents 不得以 model 结尾
+{
+ const body: AnthropicMessagesRequest = {
+   messages: [
+     { role: 'user', content: 'q1' },
+     { role: 'assistant', content: 'a1' },
+     { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Read', input: {} }] },
+     { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }] },
+     { role: 'assistant', content: 'done' },
+     {
+       role: 'user',
+       content: [
+         {
+           type: 'text',
+           text: '<system-reminder>\nPlease summarize the conversation.\n</system-reminder>',
+         },
+       ],
+     },
+   ],
+ };
+ const cs = buildContents(body);
+ assert.strictEqual(cs[cs.length - 1].role, 'user', '不得以 model 结尾');
+ const last = cs[cs.length - 1].parts[0].text!;
+ assert.ok(
+   last.includes('<USER_REQUEST>\nPlease summarize the conversation.\n</USER_REQUEST>'),
+   'reminder 内文须作为最后一条 user',
+ );
+ assert.ok(!last.includes('<system-reminder'), '标签不得上传');
+ assert.strictEqual(cs[cs.length - 2].role, 'model');
+ assert.strictEqual(cs[cs.length - 2].parts[0].text, 'done');
 }
 
 // 3. 非流式响应形状
